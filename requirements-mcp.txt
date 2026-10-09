@@ -1,0 +1,6 @@
+# Optional: MCP support (`kpl mcp` / `kpl gui --mcp`), for connecting an LLM
+# client to design/inspect/run a pipeline. Not needed to build or run
+# pipelines otherwise — most users won't need this installed at all.
+#
+# Install with: pip install -r requirements-mcp.txt
+mcp>=2.0.0

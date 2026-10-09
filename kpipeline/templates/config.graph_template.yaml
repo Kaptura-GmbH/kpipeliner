@@ -1,0 +1,71 @@
+# kpipeliner – Graph Configuration
+# Edit this file to configure your pipeline.
+
+name: "my_pipeline"
+description: "My pipeline description."
+author: "Your Name"
+date: "2026-01-01"
+version: "1.0"
+
+# Parallel execution settings
+execution:
+  cpu_workers: 2   # max simultaneous CPU nodes
+  gpu_workers: 1   # max simultaneous GPU nodes
+
+# Optionally restrict which node types appear in the GUI (leave empty for all)
+available_nodes: []
+
+# Nodes that should never have their cache cleared
+frozen_nodes: []
+
+# Base-node sources for this pipeline:
+# load the installation-wide default dir (default_base_nodes_dir in the
+# pipeliner's config.yaml)?
+load_default_base_nodes_dir: true
+# Additional directories to load base nodes from (absolute, or relative to
+# this pipeline directory). Scanned before the default dir, so on a name
+# clash the custom node type wins.
+custom_base_nodes_dirs: []
+
+# Where this pipeline's cache/ and data/ live. Relative to this pipeline
+# directory, or an absolute path (starting with '/') to store them elsewhere
+# (e.g. a large disk shared by several pipelines).
+cache_dir: cache
+data_dir: data
+
+# Per-node file logging (applies to every node in this pipeline, not
+# configurable per node). Log level: DEBUG | INFO | OUTPUT | WARNING | ERROR.
+# Log file: cache/<uuid>/<node_name>/log/run.log (appended across runs).
+# Set log_enabled: false to turn file logging off entirely.
+log_level: INFO
+log_enabled: true
+
+# Node names marking this pipeline's inputs / outputs (metadata; the GUI
+# shows them with brown / green title bars — set via node right-click).
+inputs: []
+outputs: []
+
+# Execution-order-only connections: target runs after source, no data
+# exchanged (for cases with no nodes.X.Y reference between them). A target
+# can have several entries (waits on all of them); a source feeds only one
+# target. Set via the GUI by dragging a node's jump-out (title bar, right
+# edge) to another node's jump-in (title bar, left edge).
+# jump_links:
+#   - source: my_node_1
+#     target: my_node_2
+jump_links: []
+
+# Nodes (added by kpl add <type> or via GUI)
+# nodes:
+#   - name: my_node_1
+#     type: example_add
+#     gui:
+#       position: [100, 100]
+#       color: null
+#     inputs:
+#       - name: a
+#         value: 10
+#       - name: b
+#         value: 20
+#     outputs:
+#       - name: result

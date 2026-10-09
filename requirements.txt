@@ -1,0 +1,12 @@
+# kpipeliner core dependencies
+pyyaml>=6.0
+tqdm>=4.65
+
+# GUI server
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+websockets>=12.0
+
+# System monitoring (optional but recommended for CPU/GPU stats)
+psutil>=5.9
+

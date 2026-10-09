@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kpipeliner"
+dynamic = ["version"]
+description = "kpipeliner (kpl) is a node-based pipeline manager."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "tqdm>=4.65",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+monitoring = ["psutil>=5.9"]
+
+[project.scripts]
+kpl = "kpipeline.cli:main"
+
+[tool.hatch.version]
+path = "kpipeline/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["kpipeline", "kpipeline_gui"]
+
+[tool.hatch.build]
+exclude = [
+    "kpipeline_gui/frontend/node_modules",
+    "kpipeline_gui/frontend/src",
+    "kpipeline_gui/frontend/index.html",
+    "kpipeline_gui/frontend/package.json",
+    "kpipeline_gui/frontend/package-lock.json",
+    "kpipeline_gui/frontend/vite.config.js",
+]

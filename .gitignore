@@ -1,0 +1,9 @@
+.venv/
+*.pyc
+.claude/
+__pycache__/
+graphify-out/
+milestones.md
+decisions.md
+CLAUDE.md
+Readme

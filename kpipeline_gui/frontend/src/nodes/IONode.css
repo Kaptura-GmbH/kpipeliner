@@ -1,0 +1,271 @@
+.io-node {
+  background: #1e2a3a;
+  border: 2px solid #4a5568;
+  border-radius: 6px;
+  min-width: 150px;
+  max-width: 260px;
+  font-size: 12px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  box-shadow: 0 2px 8px rgba(0,0,0,.4);
+  transition: border-color .2s;
+}
+
+.io-node-selected {
+  box-shadow: 0 0 0 2px #7c63ed, 0 2px 12px rgba(99,179,237,.3);
+}
+
+.io-header {
+  position: relative;
+  border-radius: 4px 4px 0 0;
+  padding: 6px 8px 4px;
+}
+
+.io-header-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.io-title {
+  flex: 1;
+  font-weight: 700;
+  font-size: 12px;
+  color: #e2e8f0;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.io-title-input {
+  flex: 1;
+  background: rgba(0,0,0,.3);
+  border: 1px solid #63b3ed;
+  border-radius: 3px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 4px;
+  outline: none;
+  width: 100%;
+}
+
+.io-subtype {
+  font-size: 10px;
+  color: rgba(255,255,255,.5);
+  margin-top: 1px;
+}
+
+.io-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.state-dot-PENDING   { background: #4a5568; }
+.state-dot-WAITING   { background: #b7791f; }
+.state-dot-RUNNING   { background: #48bb78; animation: blink 1s infinite; }
+.state-dot-COMPLETED { background: #4299e1; }
+.state-dot-FAILED    { background: #fc8181; }
+.state-dot-SKIPPED   { background: #2d3748; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.io-body {
+  display: flex;
+  padding: 4px 0;
+}
+
+.io-inputs,
+.io-outputs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.io-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+}
+
+.io-row-input  { justify-content: flex-start; }
+.io-row-output { justify-content: flex-end; }
+
+.io-label {
+  font-size: 11px;
+  color: #a0aec0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+}
+
+.io-row-output .io-label { text-align: right; margin-right: 4px; }
+.io-row-input  .io-label { margin-left: 4px; }
+
+/* ReactFlow handles — empty circle when disconnected, filled when connected.
+   Colors read through CSS vars (set inline per-handle from IONode.jsx's
+   handleVars()) so a link's handle_color/hide/selection override can beat
+   these !important rules — a plain inline style property couldn't. Unset,
+   each var falls back to the plain default look below. */
+.io-handle {
+  background: var(--handle-center, #1e2a3a) !important;
+  border: 2px solid var(--handle-ring, #718096) !important;
+  box-shadow: var(--handle-glow, none) !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  cursor: pointer;
+}
+
+.io-handle-connected {
+  background: var(--handle-center, #4a5568) !important;
+}
+
+.io-handle:hover {
+  background: #63b3ed !important;
+  border-color: #63b3ed !important;
+}
+
+.io-handle-left  { left:  -5px !important; }
+.io-handle-right { right: -5px !important; }
+
+/* Jump ports: execution-order-only, no data. Sit on the title-bar edge, at
+   the same x as regular output/input handles (right/left respectively),
+   revealed on hover/drag by GraphPanel — see IONode.jsx. Diamond shape +
+   amber color to read as distinct from the circular data-port handles.
+   Same --handle-center/--handle-ring/--handle-glow var scheme as .io-handle
+   (amber instead of the plain default) so a selected/colored/hidden jump
+   link's per-handle override still applies here. */
+.io-jump-handle {
+  top: 18px !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 2px !important;
+  transform: translateY(-50%) rotate(45deg) !important;
+  background: var(--handle-center, #1e2a3a) !important;
+  border: 2px solid var(--handle-ring, #d69e2e) !important;
+  box-shadow: var(--handle-glow, none) !important;
+}
+
+.io-jump-handle-out { right: -5px !important; }
+.io-jump-handle-in  { left:  -5px !important; }
+
+.io-jump-handle.io-handle-connected {
+  background: var(--handle-center, #d69e2e) !important;
+}
+
+.io-jump-handle:hover {
+  background: #f6ad55 !important;
+  border-color: #f6ad55 !important;
+}
+
+/* Node currently running in a terminal `kpl run` of the same directory —
+   passive highlight only (bright pulsing glow), shared with GroupNode for
+   folded groups whose hidden children are running. */
+.io-node-ext-running {
+  box-shadow: 0 0 6px 2px rgba(246, 224, 94, 0.65);
+  animation: ext-running-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ext-running-pulse {
+  0%, 100% { box-shadow: 0 0 6px 2px rgba(246, 224, 94, 0.45); }
+  50%      { box-shadow: 0 0 16px 5px rgba(246, 224, 94, 0.85); }
+}
+
+/* ── kwui-enabled node type (node_config.yaml `kwui: true`) ────────────────
+   Distinguishable at a glance by TWO independent cues, because neither the
+   border color nor the header color was free to take: the border color
+   carries the run state (set inline from STATE_BORDER) and the header carries
+   the pipeline input/output markers or the user's own node color.
+     1. shape  — a much larger corner radius, so the silhouette differs even
+                 when zoomed too far out to read anything;
+     2. color  — a cyan ring (an accent no other node cue uses: brown=input,
+                 green=output, amber=jump ports, violet=jump edges,
+                 blue=selection, yellow=externally running).
+   The ring is a box-shadow, so every combination with the other box-shadow
+   states needs its own explicit rule below — a later single-property rule
+   would otherwise drop the ring entirely. */
+.io-node-kwui {
+  border-radius: 16px;
+  box-shadow: 0 0 0 2px #22d3ee, 0 2px 8px rgba(0,0,0,.4);
+}
+
+.io-node-kwui .io-header {
+  border-radius: 14px 14px 0 0;
+}
+
+/* Selection must stay obvious on a kwui node: keep the cyan ring, put the
+   familiar blue selection ring immediately outside it. */
+.io-node-kwui.io-node-selected {
+  box-shadow: 0 0 0 2px #22d3ee, 0 0 0 5px #7c63ed, 0 2px 12px rgba(99,179,237,.3);
+}
+
+/* Externally running (terminal `kpl run`) keeps its pulsing yellow glow, with
+   the cyan ring preserved underneath it. */
+.io-node-kwui.io-node-ext-running {
+  animation: kwui-ext-running-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes kwui-ext-running-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px #22d3ee, 0 0 6px 4px rgba(246, 224, 94, 0.45); }
+  50%      { box-shadow: 0 0 0 2px #22d3ee, 0 0 16px 7px rgba(246, 224, 94, 0.85); }
+}
+
+.io-kwui-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: .5px;
+  color: #083344;
+  background: #22d3ee;
+  border-radius: 3px;
+  padding: 2px 3px;
+  cursor: help;
+}
+
+.io-frozen-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.io-underlying-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 8px 6px;
+}
+
+/* Deselected (bound but not enabled): outlined/muted in the target group's
+   own color, so you can see what it WOULD look like selected. Selected
+   (.io-group-chip-enabled): filled solid in that same color, mirroring
+   IONode's own .io-kwui-badge visual language. */
+.io-group-chip {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: .3px;
+  border-radius: 3px;
+  padding: 2px 5px;
+  cursor: pointer;
+  color: var(--chip-color, #4a5568);
+  background: transparent;
+  border: 1px solid var(--chip-color, #4a5568);
+}
+
+.io-group-chip-enabled {
+  color: #0b0e14;
+  background: var(--chip-color, #4a5568);
+  border-color: var(--chip-color, #4a5568);
+  /* Sharper than the group's own (softer, wider) highlight ring — a tight
+     glow reads better at this chip's small size. --chip-glow is the same
+     color as --chip-color with alpha baked in (set alongside it in
+     IONode.jsx — hex+alpha suffix, not color-mix(), matching how every
+     other alpha-blended color in this codebase is computed in JS). */
+  box-shadow: 0 0 5px 1px var(--chip-color, #4a5568), 0 0 9px 2px var(--chip-glow, transparent);
+}

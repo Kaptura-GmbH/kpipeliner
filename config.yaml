@@ -1,0 +1,52 @@
+# Default directory containing base node types (relative to this file, or
+# absolute). Nodes are grouped in category subdirectories; a category starting
+# with '_' is ignored. Nodes directly in the root get the category
+# 'no category'. Pipelines can opt out of / extend this via
+# load_default_base_nodes_dir and custom_base_nodes_dirs in their
+# graph_config.yaml. (Legacy key name: base_nodes)
+default_base_nodes_dir: /mnt/think4t/projects/ahkgit/kap-base-nodes
+
+# Directory for groups exported from the GUI as reusable components
+# (relative to this file, or absolute). Components are stored as
+# <group_base_nodes>/<category>/<name>.yaml and appear in the components
+# panel under 'groups/<category>'.
+group_base_nodes: /mnt/think4t/projects/ahkgit/kap-base-nodes/groups
+
+# Python environment kpl itself runs in, and the fallback for any node that
+# declares no environment of its own. Absolute path to a venv dir, or null to
+# use the default python environment (whatever `python3` resolves to when kpl
+# is invoked). Set by install.sh (--venv [path], or no flag for null) — edit
+# by hand + re-run install.sh to change.
+python_env: null
+
+# Whether a `nodes.X.Y` input reference is resolved lazily (the child node
+# subprocess reads the cached value itself, the first time its node.py code
+# touches self.inputs[name].value) or eagerly (the parent reads the cached
+# value up front and bakes it into the subprocess's CLI args, as before this
+# was introduced). Lazy is the default: it lets a node skip reading an input
+# it never actually uses (e.g. an optional/conditional branch), and avoids
+# paying the read cost before we know the node will run. Set to false only to
+# restore the old eager behavior (e.g. while debugging a lazy-read regression
+# in a specific node type).
+lazy_input_resolution: false
+
+# Where `kpl run --kwui` / `kpl run_debug --kwui` serve workflow.py.
+# host: 0.0.0.0 listens on all interfaces, so the page is reachable from other
+#   machines on the network (kwebui has no authentication — use 127.0.0.1 to
+#   restrict it to this machine).
+# port: starting port; the first free one at or above it is used.
+# open_browser: open a browser on this machine as soon as the server is up.
+# Per-run overrides: --kwui-host / --kwui-port / --kwui-no-browser.
+kwui:
+  host: 0.0.0.0
+  port: 8701
+  open_browser: true
+
+gui:
+  background:
+    pattern: dots  # dots, lines, cross, none
+    gap: 10
+    size: 1
+    color: '#2d3748'
+  snap:
+    enabled: true

@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+"/mnt/think4t/projects/ahkgit/kpipeliner-public-release/.venv/bin/python3" "/mnt/think4t/projects/ahkgit/kpipeliner-public-release/kpipeline.py" "$@"

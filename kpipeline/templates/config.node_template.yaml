@@ -1,0 +1,75 @@
+# kpipeliner – Node Configuration Template
+
+author: "Your Name"
+date: "2026-01-01"
+version: "1.0"
+description: "Describe what this node does."
+
+# kwui: true            # give this node a web UI panel via self.ui in a
+#                       # `kpl run --kwui` run (self.ui is None without it)
+
+# underlying_groups:      # Declares named GROUP SLOTS this node type can use -
+#   - name: group_a       # same shape as inputs/outputs above, just a name, no
+#     description: "..."  # binding here. Each pipeline that uses this node type
+#     address: cat/name   # binds each slot to one of ITS OWN actual groups, per
+#   - name: group_b       # node instance, via that node's Properties panel (a
+#                         # bare string instead of {name: ...} is also accepted,
+#                         # with no description/address). A bound slot shows as
+#                         # a clickable chip under the node in the GUI (starts
+#                         # disabled, click to enable+highlight); also reachable
+#                         # from this node's own code as self.groups['group_a']
+#                         # — .inputs['x'] = value (one-off, not saved) then
+#                         # .run() (blocking, returns True/False), then
+#                         # .outputs['y'] to read its result, and
+#                         # .remove_cache() (blocking, returns True/False) to
+#                         # clear the cache of every node in the group.
+#                         # `description` (optional) is shown next to the slot
+#                         # in the Properties panel, explaining what it needs.
+#                         # `address` (optional) names an exported group
+#                         # component (category/name, as shown in the
+#                         # Components panel — bare `name` if it has no
+#                         # category). When a node with this slot is created,
+#                         # the GUI auto-instantiates and binds that component
+#                         # if it exists; if not, it asks whether to create the
+#                         # node anyway (slot left unbound) or cancel. No
+#                         # `address` = the slot is just created empty, as
+#                         # above.
+
+
+# inputs:
+#   - name: input_name
+#     type: STRING   # STRING | INT | FLOAT | BOOL | FILE | DIR
+#     default: "default_value"
+#     description: "What this input is for."
+#
+#   - name: count
+#     type: INT
+#     default: 10
+#
+#   - name: ratio
+#     type: FLOAT
+#     default: 0.5
+#
+#   - name: flag
+#     type: BOOL
+#     default: false
+#
+#   - name: input_file
+#     type: FILE
+#     default: ""
+#
+#   - name: input_dir
+#     type: DIR
+#     default: ""
+
+# outputs:
+#   - name: result
+#     type: STRING
+#
+#   - name: out_dir
+#     type: DIR
+
+# python_environment:
+#   env_manager: null     # null | venv | conda | pixi
+#   env_directory: .venv  # path to environment
+#   requirements: requirements.txt

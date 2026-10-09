@@ -1,0 +1,220 @@
+.group-node {
+  position: relative;
+  border: 2px dashed #2d4a6b;
+  border-radius: 8px;
+  /* background now supplied inline in GroupNode.jsx (per-group color + alpha) */
+  width: 100%;
+  height: 100%;
+  min-width: 160px;
+  min-height: 80px;
+}
+
+.group-node-selected {
+  border-style: solid;
+  /* box-shadow now computed inline in GroupNode.jsx, alongside the
+     highlight ring - an inline style.boxShadow fully replaces this rule's
+     value rather than merging with it, so both rings have to be combined
+     in one place or one would silently disappear when both are active. */
+}
+
+/* Semi-transparent diagonal hatch, covering the whole group (header +
+   body) - see GroupNode.jsx for why it's the last child and why the
+   group's own zIndex is bumped above its children while disabled.
+   pointer-events: auto (the default for a positioned div, stated here for
+   clarity) is what actually blocks clicks from reaching anything under it. */
+.group-disabled-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  border-radius: 6px;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(10, 12, 16, 0.5),
+    rgba(10, 12, 16, 0.5) 8px,
+    rgba(10, 12, 16, 0.22) 8px,
+    rgba(10, 12, 16, 0.22) 16px
+  );
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+.group-node-folded {
+  height: auto !important;
+  width: auto !important;
+  min-height: unset !important;
+  /* background now supplied inline in GroupNode.jsx (per-group color + alpha) */
+}
+
+.group-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px 6px 0 0;
+  gap: 6px;
+}
+
+/* Group jump ports: same diamond/amber convention as IONode.css's
+   .io-jump-handle, var-driven so a selected/colored/hidden jump link's
+   per-handle override applies here too (see GroupNode.jsx's handleVars). */
+.group-jump-handle {
+  position: absolute !important;
+  top: 50% !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 2px !important;
+  transform: translateY(-50%) rotate(45deg) !important;
+  background: var(--handle-center, #1e2a3a) !important;
+  border: 2px solid var(--handle-ring, #d69e2e) !important;
+  box-shadow: var(--handle-glow, none) !important;
+  cursor: pointer;
+}
+
+.group-jump-handle.io-handle-connected {
+  background: var(--handle-center, #d69e2e) !important;
+}
+
+.group-jump-handle:hover {
+  background: #f6ad55 !important;
+  border-color: #f6ad55 !important;
+}
+
+.group-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #a0aec0;
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-title-block {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
+.group-id-label {
+  font-size: 8px;
+  color: #718096;
+  opacity: 0.75;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(0,0,0,.3);
+  border: 1px solid #63b3ed;
+  border-radius: 3px;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 4px;
+  outline: none;
+}
+
+.group-fold-btn {
+  background: transparent;
+  border: none;
+  color: #718096;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.group-fold-btn:hover { color: #a0aec0; }
+
+/* ── Folder-view external handles ── */
+.group-ext-handles {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  min-width: 180px;
+}
+
+.group-ext-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.group-ext-entry {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  position: relative;
+  gap: 4px;
+}
+
+.group-ext-entry-out {
+  justify-content: flex-end;
+}
+
+.group-no-handles {
+  font-size: 9px;
+  color: #4a5568;
+  padding: 2px 0;
+}
+
+.group-handle-label {
+  font-size: 10px;
+  color: #a0aec0;
+}
+
+.group-handle {
+  background: #4a5568 !important;
+  border: 2px solid #718096 !important;
+  width: 8px !important;
+  height: 8px !important;
+}
+
+/* ── User-defined group ports (amber, distinct from auto handles) ── */
+.group-port {
+  position: absolute;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  pointer-events: none; /* only the handles catch the mouse */
+  z-index: 5;
+}
+
+/* Shifted inward so the handle pair matches the folded folder view: the
+   outer (solid) dot sits on the border line, the inner (hollow) dot a bit
+   inside the group. */
+.group-port-in { left: 9px; }
+.group-port-out { right: 9px; justify-content: flex-end; }
+
+.group-port-label {
+  font-size: 9px;
+  color: #d69e2e;
+  margin: 0 12px;
+  white-space: nowrap;
+}
+
+.group-port-handle {
+  pointer-events: all;
+  width: 9px !important;
+  height: 9px !important;
+}
+
+/* Filled when the dot's side has a link, empty otherwise */
+.group-port-filled {
+  background: var(--handle-center, #d69e2e) !important;
+  border: 2px solid var(--handle-ring, #f6ad55) !important;
+  box-shadow: var(--handle-glow, none) !important;
+}
+
+.group-port-empty {
+  background: var(--handle-center, #1a202c) !important;
+  border: 2px solid var(--handle-ring, #d69e2e) !important;
+  box-shadow: var(--handle-glow, none) !important;
+}
