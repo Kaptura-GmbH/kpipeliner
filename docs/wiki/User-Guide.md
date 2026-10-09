@@ -885,6 +885,11 @@ each node's jump-out (§3.8) until a node has none. Since a jump-out feeds only 
 target, this is always a straight sequence — which is what makes "the current
 step" meaningful.
 
+Only the **UI nodes** of that sequence (nodes whose `node_config.yaml` has
+`kwui: true`, §8.3) appear as steps in the tracker. Nodes without a UI still run
+in their place in the sequence, just like in a normal run, but they are not
+listed in the workflow.
+
 Nodes that are only pulled in as **data dependencies** still run normally, exactly
 as with `kpl run <node>`: before a step starts, each of its connected inputs is
 either taken from the cache or the node producing it is run first (recursively,

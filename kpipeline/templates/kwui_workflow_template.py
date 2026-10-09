@@ -1,8 +1,9 @@
 """Workflow UI for this pipeline — served by `kpl run --kwui`.
 
-`load_tasks()` reads graph_config.yaml and returns one tracker step per node
-in the pipeline's jump-link sequence (starting at the declared `inputs:` nodes,
-following each node's jump-out until one has none).
+`load_tasks()` reads graph_config.yaml and returns one tracker step per UI node
+(`kwui: true`) in the pipeline's jump-link sequence (starting at the declared
+`inputs:` nodes, following each node's jump-out until one has none). Nodes in
+that sequence without a UI still run, but are not listed.
 
 `kpl` looks for exactly two attributes on this class:
   * `self.tracker`       — a workflow_tracker whose task ids are node names

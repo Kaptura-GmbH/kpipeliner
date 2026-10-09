@@ -561,7 +561,10 @@ two attributes in `build()`:
 **jump-link sequence**: it starts at every node listed in `graph_config.yaml`'s
 top-level `inputs:` and follows each node's jump-out until one has none. A
 jump-out feeds at most one target, so this is always a linear sequence — that's
-what makes a single "current step" meaningful.
+what makes a single "current step" meaningful. Only the nodes of that sequence
+that are **kwui-enabled** (`kwui: true` in `node_config.yaml`, see 7.2) become
+tracker steps; the other nodes in the chain still run, in order, exactly as in a
+normal run — they just have no UI, so the workflow doesn't list them.
 
 **Input references are resolved exactly as in `kpl run <node>`**: before a step
 runs, every `nodes.X.Y` input is either read from the cache or its producing node
