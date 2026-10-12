@@ -561,6 +561,42 @@ export default function App() {
     }
   }
 
+  // Binding an underlying_nodes slot (Properties panel dropdown). Simpler than
+  // the group version above: it only ever touches the calling node's own slot
+  // (a bound node needs no highlight/disabled bookkeeping of its own). The
+  // binding is a node NAME, so renameNode / the delete handler (GraphPanel.
+  // onNodesDelete) keep it in sync — see there.
+  function handleBindUnderlyingNode(nodeId, slotName, newNodeId) {
+    const oldNodeId = nodes.find(n => n.id === nodeId)?.data?.underlying_nodes?.find(s => s.name === slotName)?.node_id || null
+    let updated = nodes.map(n => (
+      n.id === nodeId
+        ? { ...n, data: { ...n.data, underlying_nodes: (n.data.underlying_nodes || []).map(s =>
+            s.name === slotName ? { ...s, node_id: newNodeId } : s) } }
+        : n
+    ))
+    // A fresh binding starts INACTIVE (looks disabled), like a freshly bound
+    // group — not whatever stale active flag the node carried. The node we just
+    // unbound from, if nothing else still binds it, drops its flag too so it is
+    // a plain node again (and doesn't reappear as active if bound later).
+    const stillBound = id => updated.some(n => (n.data?.underlying_nodes || []).some(s => s.node_id === id))
+    updated = updated.map(n => {
+      if (!n.data?.underlying_active) {
+        return n
+      }
+      if (n.id === newNodeId || (n.id === oldNodeId && !stillBound(oldNodeId))) {
+        return { ...n, data: { ...n.data, underlying_active: false } }
+      }
+      return n
+    })
+    handleGraphChange(updated, edges)
+    // Same reason as handleBindUnderlyingGroup: the Properties panel reads
+    // `selectedNode`, a separate state that doesn't follow `nodes` on its own.
+    if (selectedNode?.id === nodeId) {
+      const patchedNode = updated.find(n => n.id === nodeId)
+      if (patchedNode) setSelectedNode(patchedNode)
+    }
+  }
+
   // Link (edge) property updates — handle_color / hide, set from the
   // Properties panel when a plain node-to-node edge (or a jump link) is
   // selected. `handle_color` belongs to the HANDLE, not just this one wire —
@@ -631,6 +667,12 @@ export default function App() {
             : v
         }
         data = { ...data, input_values: rewritten }
+      }
+      // An underlying_nodes binding is this node's NAME (unlike a group's
+      // stable id), so a rename must follow it or the binding silently dangles.
+      if ((data?.underlying_nodes || []).some(s => s.node_id === oldId)) {
+        data = { ...data, underlying_nodes: data.underlying_nodes.map(s =>
+          s.node_id === oldId ? { ...s, node_id: newId } : s) }
       }
       if (n.id === oldId) return { ...n, id: newId, data: { ...data, label: newId } }
       return data === n.data ? n : { ...n, data }
@@ -791,6 +833,9 @@ export default function App() {
           color: tn.color || null,
           state: 'PENDING',
           is_kwui: !!bt.kwui,
+          underlying_nodes: (bt.underlying_nodes || []).map(slot => (
+            { name: slot.name, description: slot.description || '', type: slot.type || null, node_id: null }
+          )),
         },
       })
     })
@@ -909,6 +954,11 @@ export default function App() {
             ? { name: slot.name, description: slot.description || '', group_id: b.group_id, label: b.label }
             : { name: slot.name, description: slot.description || '', group_id: null, label: null }
         }),
+        // Declared underlying-NODE slots, all unbound at creation (a node has
+        // no `address` to auto-instantiate, unlike a group slot).
+        underlying_nodes: (nt.underlying_nodes || []).map(slot => (
+          { name: slot.name, description: slot.description || '', type: slot.type || null, node_id: null }
+        )),
       },
     }
     handleGraphChange([...nodes, newNode, ...allNewNodes], [...edges, ...allNewEdges])
@@ -1088,6 +1138,8 @@ export default function App() {
             nodeState={selectedNode ? nodeStates[selectedNode.id] : null}
             onUpdate={(changes) => selectedNode && handleNodeUpdate(selectedNode.id, changes)}
             onBindUnderlyingGroup={(slotName, groupId) => selectedNode && handleBindUnderlyingGroup(selectedNode.id, slotName, groupId)}
+            availableNodes={nodes.filter(n => n.type === 'ioNode').map(n => ({ id: n.id, type: n.data?.node_type }))}
+            onBindUnderlyingNode={(slotName, nodeId) => selectedNode && handleBindUnderlyingNode(selectedNode.id, slotName, nodeId)}
             onUpdateEdge={handleEdgeUpdate}
             onUpdateEdgesBulk={handleEdgesBulkUpdate}
             onGroupPortsChange={(action) => selectedNode && handleGroupPortsChange(selectedNode.id, action)}

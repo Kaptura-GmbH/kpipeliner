@@ -143,6 +143,9 @@ class GroupPortDict:
     read-only, lazily read from cache after a run — reuses
     KParameter.get_cached_value(), same mechanism as SourceNodeRef."""
 
+    # Word used in error messages; NodePortDict (underlying nodes) overrides it.
+    _kind = 'group'
+
     def __init__(self, port_map, owner, readonly, group_ref):
         self._port_map = port_map or {}
         self._owner = owner
@@ -162,7 +165,7 @@ class GroupPortDict:
         # confusing "not a declared port" instead of the real problem.
         self._group_ref._require_bound()
         if name not in self._port_map:
-            raise KeyError(f"'{name}' is not a declared port on this group")
+            raise KeyError(f"'{name}' is not a declared port on this {self._kind}")
         if self._readonly:
             node_id, port_name = self._port_map[name]
             probe = KParameter(port_name)
@@ -172,10 +175,18 @@ class GroupPortDict:
     def __setitem__(self, name, value):
         self._group_ref._require_bound()
         if self._readonly:
-            raise TypeError('group outputs are read-only')
+            raise TypeError(f'{self._kind} outputs are read-only')
         if name not in self._port_map:
-            raise KeyError(f"'{name}' is not a declared input on this group")
+            raise KeyError(f"'{name}' is not a declared input on this {self._kind}")
         self._staged[name] = value
+
+
+class NodePortDict(GroupPortDict):
+    """self.nodes['slot_name'].inputs / .outputs — same behavior as
+    GroupPortDict (staged settable inputs, read-only cache-backed outputs),
+    except the port map is just {port_name: [bound_node_id, port_name]} of ONE
+    node rather than a group's resolved inner-node mapping."""
+    _kind = 'node'
 
 
 class GroupRef:
@@ -260,6 +271,111 @@ class GroupRef:
         return r.returncode == 0
 
 
+#: Env var carrying the chain of node names currently running via NodeRef.run(),
+#: comma-separated, outermost first. Inherited by every nested `kpl` process, so
+#: a node bound (directly or through others) back to one already in the chain is
+#: refused instead of nesting forever.
+UNDERLYING_STACK_ENV = 'KPL_UNDERLYING_STACK'
+
+
+class NodeRef:
+    """self.nodes['slot_name'] inside node.py — only for a node type that
+    declares a matching slot in its node_config.yaml's `underlying_nodes`,
+    bound (per instance, in graph_config.yaml) to a real node in this
+    pipeline. The node can then treat that node like a subroutine: stage input
+    overrides, run it WHEN IT WANTS (blocking, as many times as it wants), read
+    its outputs.
+
+    Same idea as GroupRef above, one node instead of a group. Like GroupRef —
+    and unlike SourceNodeRef — this is an EXPLICIT, node-type-declared
+    relationship the node itself drives. The bound node is deliberately NOT a
+    `nodes.X.Y` data dependency of the owner: the scheduler never runs it on
+    its own, only this node's code decides if/when/how often it runs.
+
+    Only ever constructed inside a running node subprocess
+    (KNode._init_argparser)."""
+
+    def __init__(self, name, info, owner):
+        self.name = name
+        self.node_id = info.get('node_id')
+        self.node_type = info.get('type')
+        self._owner = owner
+        self.inputs = NodePortDict(
+            {p: [self.node_id, p] for p in info.get('inputs') or []},
+            owner, readonly=False, group_ref=self)
+        self.outputs = NodePortDict(
+            {p: [self.node_id, p] for p in info.get('outputs') or []},
+            owner, readonly=True, group_ref=self)
+
+    def _require_bound(self):
+        if not self.node_id:
+            raise RuntimeError(
+                f"Underlying node '{self.name}' is not bound to any node in "
+                f"this pipeline yet — bind it in this node's Properties panel "
+                f"(or `underlying_nodes:` in graph_config.yaml)."
+            )
+
+    @staticmethod
+    def _cli_value(value):
+        if value is True:
+            return 'true'
+        if value is False:
+            return 'false'
+        return str(value)
+
+    def run(self, use_cache=True):
+        """Blocking: run the bound node now via `kpl run`, applying staged
+        self.inputs[...] = value overrides as one-off `--key value` params
+        (never written to graph_config.yaml). The node itself ALWAYS
+        re-executes; `use_cache` only controls whether ITS OWN upstream
+        dependencies may be taken from cache (same as `kpl run <node>`).
+        Its jump-link successors are NOT run (`--no-jump-forward`) — a
+        subroutine call must not trigger whatever merely comes after it.
+        Returns True on success, False on failure (also logged). Raises
+        RuntimeError if unbound, or if running it would nest back into a node
+        that is already running further up the chain."""
+        self._require_bound()
+        owner_name = getattr(self._owner, 'name', None)
+        stack = [s for s in os.environ.get(UNDERLYING_STACK_ENV, '').split(',') if s]
+        if owner_name:
+            stack = stack if owner_name in stack else stack + [owner_name]
+        if self.node_id in stack:
+            raise RuntimeError(
+                f"Refusing to run '{self.node_id}' from '{owner_name}': it is "
+                f"already running in this chain ({' -> '.join(stack)}).")
+        env = dict(os.environ)
+        env[UNDERLYING_STACK_ENV] = ','.join(stack)
+        # Flags BEFORE the node id: `kpl run` collects everything after it
+        # (argparse.REMAINDER) as node parameters.
+        cmd = ['kpl', 'run', '--no-jump-forward', '--exit-status']
+        if not use_cache:
+            cmd.append('--no-use-cache')
+        cmd.append(self.node_id)
+        for key, value in self.inputs._staged.items():
+            cmd += [f'--{key}', self._cli_value(value)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            if r.returncode != 0:
+                output = (r.stdout or '') + (r.stderr or '')
+                print(f"[NodeRef.run] 'kpl run {self.node_id}' failed "
+                      f"(exit {r.returncode}):\n{output}", flush=True)
+                if hasattr(self._owner, 'log'):
+                    self._owner.log(
+                        f"NodeRef.run('{self.node_id}') failed (exit {r.returncode}): {output}",
+                        level='error',
+                    )
+            return r.returncode == 0
+        finally:
+            self.inputs._staged.clear()
+
+    def remove_cache(self):
+        """Blocking: `kpl clean <node_id>` — clears this node's cache (a frozen
+        node is skipped, same as on the CLI). True on success."""
+        self._require_bound()
+        r = subprocess.run(['kpl', 'clean', '--exit-status', self.node_id])
+        return r.returncode == 0
+
+
 class KNode:
     def __init__(self, name=None, node_type=None, arg_parser=False, verbose=False, externals=None):
         self.name = name
@@ -268,6 +384,11 @@ class KNode:
         self.inputs = {}
         self.outputs = {}
         self.groups = {}
+        # Declared underlying-node slots (name -> KParameter holding the bound
+        # node id, same shape as self.groups above); inside a running node
+        # subprocess, `self.nodes` holds the usable NodeRef objects.
+        self.underlying_nodes = {}
+        self.nodes = {}
         self.state = NodeState.PENDING
         self.error = None
         self.description = ''
@@ -390,6 +511,16 @@ class KNode:
             for g in (cfg.get('underlying_groups', []) or [])
         ]
         self.groups = {name: KParameter(name) for name in _group_slot_names if name}
+
+        # Declared underlying-NODE slots — same declaration shape/tolerance as
+        # underlying_groups above; bound per instance in graph_config.yaml's
+        # `underlying_nodes: [{name, value}]` (see KGraph.load_from_yaml).
+        # Reachable from this node's own code as self.nodes[name] — see NodeRef.
+        _node_slot_names = [
+            (n.get('name') if isinstance(n, dict) else n)
+            for n in (cfg.get('underlying_nodes', []) or [])
+        ]
+        self.underlying_nodes = {name: KParameter(name) for name in _node_slot_names if name}
 
         py_env = cfg.get('python_environment', {}) or {}
         self.env_manager = py_env.get('env_manager')
@@ -524,6 +655,13 @@ class KNode:
         # _resolve_underlying_groups. Empty for every node type that
         # declares no slots (the default).
         p.add_argument('--groups', default='{}')
+        # {slot_name: {"node_id": id-or-null, "type": ..., "inputs": [...],
+        # "outputs": [...]}} for every underlying-node slot this node type
+        # declares (underlying_nodes in its node_config.yaml), resolved by the
+        # parent against THIS pipeline's graph; see kpipeline.py's
+        # _resolve_underlying_nodes. Empty for every node type that declares no
+        # slots (the default).
+        p.add_argument('--underlying_nodes', default='{}')
         args = p.parse_args()
 
         self.uuid = args.uuid
@@ -550,6 +688,11 @@ class KNode:
         # actual running node subprocess, which is exactly where we are now.
         groups_info = json.loads(args.groups or '{}')
         self.groups = {name: GroupRef(name, info, self) for name, info in groups_info.items()}
+
+        # Same upgrade for underlying-node slots: plain KParameter dict ->
+        # runnable NodeRef objects, only meaningful inside the real subprocess.
+        nodes_info = json.loads(args.underlying_nodes or '{}')
+        self.nodes = {name: NodeRef(name, info, self) for name, info in nodes_info.items()}
 
         self._make_output_dir(cache_dir=args.cache_dir, data_dir=args.data_dir)
         self.log_level = args.log_level

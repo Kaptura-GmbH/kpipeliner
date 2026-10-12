@@ -422,7 +422,7 @@ function formatOutputValue(val) {
   return String(val)
 }
 
-export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, onRunGroup, availableGroups, onBindUnderlyingGroup, groupMembers }) {
+export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, onRunGroup, availableGroups, onBindUnderlyingGroup, availableNodes, onBindUnderlyingNode, groupMembers }) {
   const [inputValues, setInputValues] = useState({})
   const [titleVal, setTitleVal] = useState('')
   const [descVal, setDescVal] = useState('')
@@ -753,6 +753,35 @@ export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges,
                 {(availableGroups || []).map(g => (
                   <option key={g.id} value={g.id}>{g.label}</option>
                 ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Underlying nodes: same idea as the groups above, for ONE node — bind
+          each declared slot (node_config.yaml's underlying_nodes) to a node of
+          this pipeline that THIS node's code may run itself (self.nodes[slot]).
+          The binding is not a data connection: the bound node never runs unless
+          this node's code runs it. A slot may declare the node `type` it
+          expects, which filters the list (an already-bound node of another
+          type stays listed so the current value is never hidden). */}
+      {!isGroup && node.data?.underlying_nodes?.length > 0 && (
+        <div className="props-section">
+          <div className="props-section-title">Underlying Nodes</div>
+          {node.data.underlying_nodes.map(slot => (
+            <div key={slot.name} className="props-field">
+              <label title={slot.description || undefined}>{slot.name}</label>
+              <select
+                value={slot.node_id || ''}
+                onChange={e => onBindUnderlyingNode(slot.name, e.target.value || null)}
+              >
+                <option value="">— none —</option>
+                {(availableNodes || [])
+                  .filter(n => n.id !== node.id && (!slot.type || n.type === slot.type || n.id === slot.node_id))
+                  .map(n => (
+                    <option key={n.id} value={n.id}>{n.id}</option>
+                  ))}
               </select>
             </div>
           ))}

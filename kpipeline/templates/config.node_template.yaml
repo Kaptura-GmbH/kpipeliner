@@ -36,6 +36,21 @@ description: "Describe what this node does."
 #                         # above.
 
 
+# underlying_nodes:       # Declares named NODE SLOTS - like underlying_groups
+#   - name: table         # above, but for ONE node: node.py can run the bound
+#     description: "..."  # node itself, whenever and as often as it wants -
+#     type: table_ctrl    # self.nodes['table'].inputs['x'] = 1 (one-off,
+#                         # not saved), .run() (blocking, True/False),
+#                         # .outputs['y'] (from the last run),
+#                         # .remove_cache(). Bound per node instance in
+#                         # graph_config.yaml: underlying_nodes: [{name: table,
+#                         # value: <node name>}]. The bound node is NOT a data
+#                         # dependency - it never runs unless this node's code
+#                         # runs it. `type` (optional) = the node type the slot
+#                         # expects. A bare string instead of {name: ...} is
+#                         # also accepted.
+
+
 # inputs:
 #   - name: input_name
 #     type: STRING   # STRING | INT | FLOAT | BOOL | FILE | DIR

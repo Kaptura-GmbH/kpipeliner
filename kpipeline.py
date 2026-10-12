@@ -584,6 +584,14 @@ class Pipeliner:
             if groups_payload:
                 params['groups'] = json.dumps(groups_payload)
 
+        # node.underlying_nodes: same passthrough for underlying-NODE slots
+        # (see _resolve_underlying_nodes). A no-op for every node type that
+        # declares none — the vast majority, and every pre-existing one.
+        if getattr(node, 'underlying_nodes', None):
+            nodes_payload = _resolve_underlying_nodes(node.underlying_nodes, graph)
+            if nodes_payload:
+                params['underlying_nodes'] = json.dumps(nodes_payload)
+
         # Execute
         print(f'\n---------- Running < {node_name} > ----------')
         node.state = NodeState.RUNNING
@@ -1219,6 +1227,32 @@ def _resolve_underlying_groups(node_groups, graph_config_path):
     return result
 
 
+def _resolve_underlying_nodes(node_slots, graph):
+    """{slot_name: {'node_id': id-or-None, 'type': ..., 'inputs': [names],
+    'outputs': [names]}} for a node's underlying_nodes (name -> KParameter
+    whose .value is the bound node's name, or None if this slot isn't bound
+    yet). Same contract as _resolve_underlying_groups above: one entry per
+    DECLARED slot, bound or not, so the child can raise a clear "not bound"
+    error at use-time; a bound name that no longer matches any node in this
+    pipeline (deleted/renamed since) is treated as unbound. The bound node is
+    only DESCRIBED here — it is not run, and it is not a dependency."""
+    if not node_slots:
+        return {}
+    result = {}
+    for name, kparam in node_slots.items():
+        target = graph.get_node(kparam.value) if kparam.value else None
+        if target:
+            result[name] = {
+                'node_id': target.name,
+                'type': target.type,
+                'inputs': list(target.inputs),
+                'outputs': list(target.outputs),
+            }
+        else:
+            result[name] = {'node_id': None, 'type': None, 'inputs': [], 'outputs': []}
+    return result
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -1280,6 +1314,14 @@ def main():
     p_run.add_argument('--no-parallel', action='store_true')
     p_run.add_argument('--no-use-cache', dest='use_cache', action='store_false',
                        help='Recompute instead of reusing cached node results')
+    p_run.add_argument('--exit-status', action='store_true',
+                       help='Exit with status 1 if the run failed (default: always 0, as '
+                            'for every other kpl command). Used by NodeRef.run(). With '
+                            '<node_id>, must come BEFORE it.')
+    p_run.add_argument('--no-jump-forward', action='store_true',
+                       help='With <node_id>: do not run the node\'s jump-link successors '
+                            'afterwards (used by NodeRef.run() — a node run as a subroutine). '
+                            'Must come BEFORE <node_id>.')
     p_run.add_argument('--kwui', action='store_true',
                        help='Run through workflow.py\'s kwebui UI (see: kpl kwui init)')
     _add_kwui_server_args(p_run)
@@ -1309,6 +1351,9 @@ def main():
     # clean
     p_clean = sub.add_parser('clean', help='Clean cache')
     p_clean.add_argument('node_id', nargs='?')
+    p_clean.add_argument('--exit-status', action='store_true',
+                         help='Exit with status 1 if cleaning failed (default: always 0). '
+                              'Used by NodeRef.remove_cache().')
 
     # group
     p_grp = sub.add_parser('group', help='Operate on a GUI group as a unit')
@@ -1374,8 +1419,15 @@ def main():
         if getattr(args, 'kwui', False):
             p.run_kwui(use_cache=use_cache, debug=False, **_kwui_server_args(args))
         elif args.node_id:
-            p.run_node(args.node_id, params_list=args.params,
-                       use_cache=use_cache, show_kpl=False, show_kpm=False)
+            ok = p.run_node(args.node_id, params_list=args.params,
+                            use_cache=use_cache, show_kpl=False, show_kpm=False,
+                            trigger_jump_forward=not getattr(args, 'no_jump_forward', False))
+            # Opt-in only: every other kpl command exits 0 regardless of the
+            # outcome (a project-wide gap, deliberately not changed broadly —
+            # the GUI server and scripts may rely on it); NodeRef.run()
+            # (knode.py) needs the real outcome, like GroupRef.run() does.
+            if getattr(args, 'exit_status', False):
+                sys.exit(0 if ok else 1)
         else:
             p.run_graph(parallel=parallel, use_cache=use_cache, debug=False)
 
@@ -1401,7 +1453,11 @@ def main():
         p.status()
 
     elif args.command == 'clean':
-        p.clean_cache(node_id=args.node_id)
+        ok = p.clean_cache(node_id=args.node_id)
+        # clean_cache() returns False only when it could not run at all (no
+        # config); otherwise it falls through (None) — only False is failure.
+        if getattr(args, 'exit_status', False):
+            sys.exit(1 if ok is False else 0)
 
     elif args.command == 'group':
         if args.group_command == 'list':

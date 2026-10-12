@@ -1057,3 +1057,57 @@ def run(self):
   `kpl group clean` already work on the CLI.
 - Overrides staged via `.inputs[...]` are always one-off. If you need a
   binding to persist across runs, change it in the Properties panel instead.
+
+### 9.4 Underlying nodes — the same idea for a single node
+
+Sometimes a node needs to run just **one other node**, at a moment of its own
+choosing, possibly several times with different inputs (e.g. a measurement node
+that moves a turntable, reads the load cell, moves it again). Declare an
+`underlying_nodes` slot in the node type's `node_config.yaml`:
+
+```yaml
+underlying_nodes:
+  - name: table               # referenced in node.py as self.nodes['table']
+    description: "Turntable controller this node drives."
+    type: table_ctrl          # optional: the node type this slot expects
+```
+
+and bind it per node instance. In the GUI this works like the group binding in
+§4.5: select the node and use the **Underlying Nodes** section of the Properties
+panel — one dropdown per slot, listing the other nodes of the pipeline (only those
+of the slot's `type`, if it declares one). Each bound slot shows as a small chip
+under the node (`slot → node`, in the bound node's colour).
+
+**Disabled until active — same as a bound group.** A node that is bound to a slot
+looks disabled: hatched, and clicking it selects the node that owns it instead. Make
+it active by clicking its chip under the owner (only one bound node per owner can be
+active at a time; click again to switch it off) or by double-clicking the disabled
+node. An active node is shown normally with a highlight ring in its own colour. Active
+is a temporary focus: clicking the empty canvas, or any node other than the active one
+or its owner, switches it off again. It is only about what you see — it is not saved
+to `graph_config.yaml` and has no effect on how the pipeline runs.
+
+If you rename the bound node the binding follows; if you delete it, the slot goes
+back to unbound. (In `graph_config.yaml` this is
+`underlying_nodes: [{name: table, value: table_ctrl_3}]` on that node.)
+
+In `run()`:
+
+```python
+table = self.nodes['table']
+for angle in (0, 10, 20):
+    table.inputs['angle'] = angle       # one-off override, not saved
+    if not table.run():                 # blocking; runs it EVERY time you call it
+        sys.exit(1)
+    weight = table.outputs['weight']    # result of that run
+```
+
+How it differs from an ordinary `nodes.X.Y` connection: the bound node is **not**
+a dependency of the node that owns it, so a normal run does **not** execute it
+beforehand — it runs only when (and as often as) the owner's code says so. Its
+jump-link successors are not triggered. `.remove_cache()` clears its cache.
+
+Rules and limits match §9.3: an unbound slot raises a clear `RuntimeError`; a node
+that would end up running itself (directly or via a chain) is refused; the nested
+run is blocking, is not shown live in the terminal/GUI (see its own
+`log/run.log`), and bypasses the cpu/gpu worker limits.

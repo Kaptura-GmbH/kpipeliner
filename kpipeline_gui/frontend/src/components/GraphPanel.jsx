@@ -205,6 +205,39 @@ function GraphInner({
     }), eds)
   }, [onGraphChange])
 
+  // Underlying-NODE active state — the node counterpart of the group enable/
+  // disable above. A node bound by some other node's underlying_nodes slot
+  // LOOKS disabled (hatched overlay, IONode.jsx) until it is made active; the
+  // flag is `data.underlying_active`: transient GUI state, NOT persisted
+  // (save_graph writes an explicit key list), so every bound node starts
+  // inactive on load. Radio-like across the OWNER's bound nodes: activating one
+  // deactivates the owner's others. Shared by the chip click (toggle) and the
+  // canvas double-click (always activate).
+  const setUnderlyingActive = useCallback((ownerId, targetId, mode) => {
+    const nds = extNodesRef.current, eds = extEdgesRef.current
+    const target = nds.find(n => n.id === targetId)
+    if (!target) return
+    const nowActive = mode === 'toggle' ? !target.data?.underlying_active : true
+    if (mode !== 'toggle' && target.data?.underlying_active) return
+    const owner = nds.find(n => n.id === ownerId)
+    const siblings = new Set((owner?.data?.underlying_nodes || []).map(s => s.node_id).filter(Boolean))
+    onGraphChange(nds.map(n => {
+      if (n.id === targetId) return { ...n, data: { ...n.data, underlying_active: nowActive } }
+      if (nowActive && siblings.has(n.id) && n.data?.underlying_active) {
+        return { ...n, data: { ...n.data, underlying_active: false } }
+      }
+      return n
+    }), eds)
+  }, [onGraphChange])
+
+  const handleUnderlyingNodeClick = useCallback((ownerId, targetId) => {
+    if (targetId) setUnderlyingActive(ownerId, targetId, 'toggle')
+  }, [setUnderlyingActive])
+
+  // First node whose underlying_nodes slot is bound to `targetId` (its "owner").
+  const findUnderlyingOwner = (nds, targetId) =>
+    nds.find(n => (n.data?.underlying_nodes || []).some(s => s.node_id === targetId))
+
   // "Enabled" is meant to be a transient focus, not a sticky toggle: an
   // enabled group's scope is itself, its own children, and its "parent"
   // (whichever node bound it via underlying_groups) — clicking anything
@@ -220,11 +253,22 @@ function GraphInner({
       return (clickedNode.data?.underlying_groups || []).some(s => s.group_id === group.id)
     }
     const toDisable = enabledGroups.filter(g => !isInScope(g))
-    if (toDisable.length === 0) return
+    // Same transient focus for an ACTIVE underlying node: its scope is itself and
+    // any node that binds it (its owner). Anything else deactivates it.
+    const nodeInScope = (target) => {
+      if (!clickedNode) return false
+      return clickedNode.id === target.id ||
+        (clickedNode.data?.underlying_nodes || []).some(s => s.node_id === target.id)
+    }
+    const toDeactivate = nds.filter(n => n.type === 'ioNode' && n.data?.underlying_active && !nodeInScope(n))
+    if (toDisable.length === 0 && toDeactivate.length === 0) return
     const disableIds = new Set(toDisable.map(g => g.id))
-    onGraphChange(nds.map(n => disableIds.has(n.id)
-      ? { ...n, data: { ...n.data, disabled: true, highlight_color: null } }
-      : n), eds)
+    const deactivateIds = new Set(toDeactivate.map(n => n.id))
+    onGraphChange(nds.map(n => {
+      if (disableIds.has(n.id)) return { ...n, data: { ...n.data, disabled: true, highlight_color: null } }
+      if (deactivateIds.has(n.id)) return { ...n, data: { ...n.data, underlying_active: false } }
+      return n
+    }), eds)
   }, [onGraphChange])
 
   const onPaneClickWithGroupFocus = useCallback(() => {
@@ -243,6 +287,12 @@ function GraphInner({
       if (parent) {
         setNodes(prev => prev.map(n => ({ ...n, selected: n.id === parent.id })))
       }
+    }
+    // Same for an INACTIVE bound node: it is inert (overlay), and clicking it
+    // selects the node that binds it so the user can find who owns it.
+    if (node.type === 'ioNode' && !node.data?.underlying_active) {
+      const owner = findUnderlyingOwner(extNodesRef.current, node.id)
+      if (owner) setNodes(prev => prev.map(n => ({ ...n, selected: n.id === owner.id })))
     }
     disableGroupsOutsideScope(node.id)
   }, [disableGroupsOutsideScope])
@@ -266,6 +316,14 @@ function GraphInner({
   // keeps its own, unrelated double-click meaning — renaming — via its own
   // stopPropagation).
   const onNodeDoubleClick = useCallback((_event, node) => {
+    // An inactive underlying node: activate it (idempotent — setUnderlyingActive
+    // does nothing if it already is, so renaming an ACTIVE node by title
+    // double-click is unaffected).
+    if (node.type === 'ioNode') {
+      const owner = findUnderlyingOwner(extNodesRef.current, node.id)
+      if (owner) setUnderlyingActive(owner.id, node.id, 'activate')
+      return
+    }
     if (node.type !== 'groupNode') return
     const nds = extNodesRef.current, eds = extEdgesRef.current
     const parent = nds.find(n => (n.data?.underlying_groups || []).some(s => s.group_id === node.id))
@@ -280,7 +338,7 @@ function GraphInner({
       }
       return n
     }), eds)
-  }, [onGraphChange])
+  }, [onGraphChange, setUnderlyingActive])
 
   // Clicking a connected handle selects every link attached to it — the
   // only way to (re)select a HIDDEN link, which has no visible path to
@@ -345,6 +403,13 @@ function GraphInner({
     // computeGroupHandles below takes extNodes rather than being computed
     // server-side.
     const groupById = new Map(extNodes.filter(n => n.type === 'groupNode').map(n => [n.id, n]))
+    // Same for underlying_nodes chips: the bound node's LIVE color (a rename or
+    // recolor is reflected at once; the structural binding is just a name).
+    const ioNodeById = new Map(extNodes.filter(n => n.type === 'ioNode').map(n => [n.id, n]))
+    // Every node bound by at least one underlying_nodes slot (anywhere) — these
+    // LOOK disabled unless active, like a bound group.
+    const boundNodeIds = new Set()
+    extNodes.forEach(o => (o.data?.underlying_nodes || []).forEach(s => { if (s.node_id) boundNodeIds.add(s.node_id) }))
 
     // Nodes running in a terminal `kpl run` (same workdir) get a glow. A
     // folded group glows in place of its hidden running children.
@@ -416,6 +481,14 @@ function GraphInner({
           ? { ...slot, label: target.data?.label || target.id, color: target.data?.color, enabled: !target.data?.disabled }
           : slot
       })
+      const underlyingNodes = (n.data?.underlying_nodes || []).map(slot => {
+        const target = slot.node_id ? ioNodeById.get(slot.node_id) : null
+        return target
+          ? { ...slot, color: target.data?.color, enabled: Boolean(target.data?.underlying_active) }
+          : slot
+      })
+      const ulBound = n.type === 'ioNode' && boundNodeIds.has(n.id)
+      const ulActive = ulBound && Boolean(n.data?.underlying_active)
       return {
         ...n,
         style,
@@ -467,6 +540,11 @@ function GraphInner({
           externalInputs,
           externalOutputs,
           underlying_groups: underlyingGroups,
+          underlying_nodes: underlyingNodes,
+          // Look-only flags for IONode.jsx: inactive bound -> hatched overlay;
+          // active bound -> highlight ring in the node's own color.
+          underlyingDisabled: ulBound && !ulActive,
+          underlyingActiveColor: ulActive ? (n.data?.color || '#a0aec0') : null,
           _showJumpOut: (n.type === 'ioNode' || n.type === 'groupNode') &&
             ((hoveredNodeId === n.id && !jumpDragFrom) || jumpDragFrom === n.id),
           _showJumpIn: (n.type === 'ioNode' || n.type === 'groupNode') &&
@@ -476,6 +554,7 @@ function GraphInner({
           onResize: handleGroupResize,
           onHandleClick: handleHandleClick,
           onUnderlyingGroupClick: handleUnderlyingGroupClick,
+          onUnderlyingNodeClick: handleUnderlyingNodeClick,
         },
       }
     })
@@ -525,7 +604,7 @@ function GraphInner({
         return { ...n, selected: selIds.has(n.id) }
       })
     })
-  }, [extNodes, extEdges, nodeStates, externalRunning, handleToggleFold, handleTitleChange, handleGroupResize, hoveredNodeId, jumpDragFrom, selectedEdges, handleHandleClick, handleUnderlyingGroupClick]) // eslint-disable-line
+  }, [extNodes, extEdges, nodeStates, externalRunning, handleToggleFold, handleTitleChange, handleGroupResize, hoveredNodeId, jumpDragFrom, selectedEdges, handleHandleClick, handleUnderlyingGroupClick, handleUnderlyingNodeClick]) // eslint-disable-line
 
   // ── Effect 2: EDGE sync ───────────────────────────────────────────────────
   // Runs ONLY when edges or group structure changes — NOT on plain node moves.
@@ -841,8 +920,17 @@ function GraphInner({
         : `Delete ${label}? This cannot be undone.`
       if (!window.confirm(msg)) return
     }
+    // A remaining node's underlying_nodes slot bound to a deleted node goes back
+    // to unbound (the binding is a name; left alone it would dangle and be saved
+    // to graph_config.yaml pointing at nothing).
+    const dropBindings = n => (
+      (n.data?.underlying_nodes || []).some(s => idSet.has(s.node_id))
+        ? { ...n, data: { ...n.data, underlying_nodes: n.data.underlying_nodes.map(s =>
+            idSet.has(s.node_id) ? { ...s, node_id: null } : s) } }
+        : n
+    )
     onGraphChange(
-      nds.filter(n => !idSet.has(n.id)),
+      nds.filter(n => !idSet.has(n.id)).map(dropBindings),
       eds.filter(e => !idSet.has(e.source) && !idSet.has(e.target))
     )
     idSet.forEach(nid => onDeleteNode?.(nid))

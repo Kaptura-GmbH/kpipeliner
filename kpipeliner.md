@@ -213,6 +213,12 @@ outputs:
 #     description: "Group that produces the calibration file this node needs."
 #     address: precalibration/camera_setup   # optional: category/name of a
 #                                             # group component to auto-instantiate
+
+# Only if this node type should run OTHER NODES itself, when it decides (§3.7):
+# underlying_nodes:
+#   - name: table              # self.nodes['table'] in node.py
+#     description: "Turntable controller this node drives."
+#     type: table_ctrl         # optional: node type this slot expects
 ```
 
 ### 3.2 `node.py`
@@ -273,6 +279,7 @@ if __name__ == "__main__":
 | `self.make_dir("sub")` | Create and return a subdirectory of `output_dir`. |
 | `self.ui` | The node's panel in the kwui workflow UI — `None` unless `node_config.yaml` sets `kwui: true`. See §7. |
 | `self.groups['slot']` | Handle to a group declared in `underlying_groups` and bound (in the GUI's Properties panel) to a real group in this pipeline. See §3.6. |
+| `self.nodes['slot']` | Handle to a node declared in `underlying_nodes` and bound (in `graph_config.yaml`) to a real node in this pipeline — run it whenever, as often as you like. See §3.7. |
 
 Failure convention: raise an exception or `sys.exit(1)` — any non-zero exit code
 marks the node FAILED and stops dependents. An uncaught exception is logged once
@@ -370,6 +377,69 @@ it doesn't resolve, the GUI asks whether to create the node anyway (slot
 left unbound) or cancel. No `address` → the slot is just created empty, to
 bind manually later. This binding/auto-instantiation only happens in the
 GUI — creating a node via `kpl add` always leaves every slot unbound.
+
+### 3.7 Underlying nodes — `self.nodes[...]`
+
+Same idea as §3.6, but for ONE node instead of a group: the node decides
+**if, when, how often and with which inputs** another node runs. A node type
+declares named slots (`underlying_nodes` in `node_config.yaml`, shown in §3.1);
+each node instance binds a slot to a node of the same pipeline through
+`graph_config.yaml` (on the node, mirroring `groups:`):
+
+```yaml
+- name: loadcell_check_1
+  type: loadcell_check
+  underlying_nodes:
+  - {name: table, value: table_ctrl_3}     # slot name -> node name in this pipeline
+```
+
+(In the GUI, the node's Properties panel has an **Underlying Nodes** section with
+one dropdown per slot — filtered to the slot's declared `type`. Like a bound
+group, a bound node **looks disabled** (hatched, inert) until it is made active:
+click its chip under the owner node (one active bound node per owner), or
+double-click it. Clicking an inactive bound node selects its owner. "Active" is a
+transient focus — clicking the empty canvas or an unrelated node deactivates it —
+and purely visual: it is not saved and does not change how anything runs. The
+binding follows a rename of the bound node and is cleared if that node is
+deleted.)
+
+The bound node is deliberately **not** a `nodes.X.Y` data dependency of the
+owner. The scheduler never runs it on its own — it runs only when the owner's
+code asks:
+
+```python
+def run(self):
+    table = self.nodes['table']
+    for angle in (0, 10, 20):
+        table.inputs['angle'] = angle          # one-off override — NOT saved to graph_config.yaml
+        if not table.run():                    # blocking; True/False
+            sys.exit(1)
+        weight = table.outputs['weight']       # read after a successful run (from cache)
+```
+
+| Member | Meaning |
+|---|---|
+| `.inputs['port'] = value` | Stage a one-off override for one of the bound node's declared inputs. Applies only to the next `.run()`. |
+| `.run(use_cache=True)` | Blocking; runs the bound node **every time it is called** (`kpl run` under the hood). `use_cache` only controls whether the bound node's *own upstream dependencies* may come from cache. Its jump-link successors are **not** run. Returns `True`/`False` (a failed node → `False`). |
+| `.outputs['port']` | The bound node's output value from its last run (from cache). |
+| `.remove_cache()` | Blocking; clears the bound node's cache (`kpl clean`; a frozen node is skipped). Returns `True`/`False`. |
+| `.node_id` / `.node_type` | Name / type of the bound node (`None` if unbound). |
+
+Accessing `.run()`, `.inputs` or `.outputs` on an unbound slot raises
+`RuntimeError` naming the slot. A node that would run itself, directly or
+through a chain (`A → B → A`), is refused with a `RuntimeError` instead of
+nesting forever.
+
+Limits (same as `self.groups`): the nested node's state and output are not
+shown live in the terminal/GUI (only in its own `log/run.log`), it bypasses the
+executor's cpu/gpu worker limits, and a nested node with `kwui: true` gets no
+real UI.
+
+CLI building blocks (opt-in, default behavior of `kpl run`/`kpl clean`
+unchanged): `kpl run --no-jump-forward <node>` skips the node's jump
+successors, `--exit-status` makes `kpl run`/`kpl clean` exit 1 on failure
+(otherwise they always exit 0). Flags must come **before** `<node>` —
+`kpl run` treats everything after the node name as node parameters.
 
 ---
 

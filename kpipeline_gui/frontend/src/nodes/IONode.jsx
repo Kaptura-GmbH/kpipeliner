@@ -59,8 +59,10 @@ const IONode = memo(function IONode({ id, data, selected }) {
 
   return (
     <div
-      className={`io-node ${data.is_kwui ? 'io-node-kwui' : ''} ${selected ? 'io-node-selected' : ''} ${data.extRunning ? 'io-node-ext-running' : ''}`}
-      style={{ borderColor }}
+      className={`io-node ${data.is_kwui ? 'io-node-kwui' : ''} ${selected ? 'io-node-selected' : ''} ${data.extRunning ? 'io-node-ext-running' : ''} ${data.underlyingActiveColor ? 'io-node-ul-active' : ''}`}
+      style={data.underlyingActiveColor
+        ? { borderColor, '--ul-ring': data.underlyingActiveColor, '--ul-glow': data.underlyingActiveColor + '99' }
+        : { borderColor }}
     >
       <div className="io-header" style={{ background: headerBg }}>
         <div className="io-header-top">
@@ -184,6 +186,34 @@ const IONode = memo(function IONode({ id, data, selected }) {
               title={`${g.label}${g.enabled ? ' (selected) — click to deselect' : ' — click to select'}`}
             >
               {g.label}
+            </span>
+          ))}
+        </div>
+      )}
+      {/* A node bound by another node's underlying_nodes slot looks DISABLED
+          (hatched, inert — same as a bound group) until it is made active from
+          its owner's chip or by double-clicking it. Click on it selects the
+          owner (GraphPanel.onNodeClick). Look-only: it still runs normally. */}
+      {data.underlyingDisabled && (
+        <div className="io-disabled-overlay"
+          title="Driven by another node — click: select its owner · double-click: activate" />
+      )}
+
+      {/* Underlying NODES: one chip per BOUND slot (binding happens in the
+          Properties panel, as for groups). Clicking a chip toggles whether the
+          bound node is ACTIVE (enabled + highlighted); only one bound node per
+          owner can be active at a time. */}
+      {(data.underlying_nodes || []).filter(s => s.node_id).length > 0 && (
+        <div className="io-underlying-groups">
+          {data.underlying_nodes.filter(s => s.node_id).map(s => (
+            <span
+              key={s.name}
+              className={`io-group-chip io-node-chip ${s.enabled ? 'io-group-chip-enabled' : ''}`}
+              style={{ '--chip-color': s.color || '#4a5568', '--chip-glow': (s.color || '#4a5568') + '99' }}
+              onClick={e => { e.stopPropagation(); data.onUnderlyingNodeClick?.(id, s.node_id) }}
+              title={`${s.name} → ${s.node_id}${s.enabled ? ' (active) — click to deactivate' : ' — click to activate'}`}
+            >
+              {s.name} → {s.node_id}
             </span>
           ))}
         </div>

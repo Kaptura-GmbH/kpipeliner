@@ -195,6 +195,15 @@ class KGraph:
                 if gname and gname in node.groups and 'value' in grp_cfg:
                     node.groups[gname].value = grp_cfg['value']
 
+            # Same merge for this instance's underlying-NODE slot bindings
+            # (name-only slots declared in node_config.yaml's
+            # `underlying_nodes`, bound per instance here).
+            node_slots = getattr(node, 'underlying_nodes', {})
+            for un_cfg in node_cfg.get('underlying_nodes', []) or []:
+                uname = un_cfg.get('name')
+                if uname and uname in node_slots and 'value' in un_cfg:
+                    node_slots[uname].value = un_cfg['value']
+
             self.nodes.append(node)
 
     def save_to_yaml(self, yaml_path):
@@ -233,6 +242,16 @@ class KGraph:
                     for k, v in getattr(node, 'groups', {}).items()
                 ],
             }
+            # Only for node types that DECLARE underlying-node slots: unlike
+            # `groups` above (written as [] for every node), an always-present
+            # key here would change every existing pipeline's file on its next
+            # save.
+            node_slots = getattr(node, 'underlying_nodes', {})
+            if node_slots:
+                node_cfg['underlying_nodes'] = [
+                    {'name': k, 'value': v.value}
+                    for k, v in node_slots.items()
+                ]
             cfg['nodes'].append(node_cfg)
         with open(yaml_path, 'w') as f:
             yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
@@ -450,6 +469,19 @@ class KGraph:
                     }
                     for g in (cfg.get('underlying_groups', []) or [])
                     if (g.get('name') if isinstance(g, dict) else g)
+                ],
+                # Declared underlying-NODE slots (node_config.yaml's
+                # underlying_nodes) — same tolerance and purpose as
+                # underlying_groups above; `type` (optional) is the node type
+                # a slot expects, used by the GUI to filter its dropdown.
+                'underlying_nodes': [
+                    {
+                        'name': (n.get('name') if isinstance(n, dict) else n),
+                        'description': (n.get('description', '') if isinstance(n, dict) else ''),
+                        'type': (n.get('type') if isinstance(n, dict) else None),
+                    }
+                    for n in (cfg.get('underlying_nodes', []) or [])
+                    if (n.get('name') if isinstance(n, dict) else n)
                 ],
             })
         return result

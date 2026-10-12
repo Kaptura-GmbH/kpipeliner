@@ -522,6 +522,7 @@ def get_graph():
             return node_type_cfg_cache[ntype]
         base_cfg_path = os.path.join(installed[ntype]['dir'], 'node_config.yaml')
         inp_names, out_names, is_kwui, group_slots = [], [], False, []
+        node_slots = []
         if os.path.exists(base_cfg_path):
             try:
                 bc = yaml.safe_load(open(base_cfg_path)) or {}
@@ -543,12 +544,25 @@ def get_graph():
                         'name': gname,
                         'description': (g.get('description', '') if isinstance(g, dict) else ''),
                     })
+                # Underlying-NODE slots: same declaration shape/tolerance as
+                # underlying_groups above; `type` (optional) = the node type
+                # the slot expects.
+                for n in (bc.get('underlying_nodes', []) or []):
+                    nname = n.get('name') if isinstance(n, dict) else n
+                    if not nname:
+                        continue
+                    node_slots.append({
+                        'name': nname,
+                        'description': (n.get('description', '') if isinstance(n, dict) else ''),
+                        'type': (n.get('type') if isinstance(n, dict) else None),
+                    })
             except Exception:
                 pass
-        result = (inp_names, out_names, is_kwui, group_slots)
+        result = (inp_names, out_names, is_kwui, group_slots, node_slots)
         node_type_cfg_cache[ntype] = result
         return result
 
+    all_node_names = {n.get('name') for n in cfg.get('nodes', []) or []}
     for node_cfg in cfg.get('nodes', []) or []:
         nid = node_cfg['name']
         ntype = node_cfg.get('type', '')
@@ -562,7 +576,7 @@ def get_graph():
             missing.append({'name': nid, 'type': ntype})
             continue
 
-        inp_names, out_names, is_kwui, group_slots = _node_type_cfg(ntype)
+        inp_names, out_names, is_kwui, group_slots, node_slots = _node_type_cfg(ntype)
         input_values = {}
 
         for inp in node_cfg.get('inputs', []) or []:
@@ -592,6 +606,25 @@ def get_graph():
             if target:
                 referenced_group_ids.add(target['id'])
 
+        # Per-instance underlying-NODE slot bindings (this node's own
+        # `underlying_nodes:` list), one entry per slot the TYPE declares,
+        # bound or not — same shape/round-trip as underlying_groups above.
+        # node_id is None for an unbound slot, or a bound name that no longer
+        # matches any node in this pipeline (deleted/renamed since).
+        bound_nodes = {}
+        for un in node_cfg.get('underlying_nodes', []) or []:
+            if un.get('name'):
+                bound_nodes[un['name']] = un.get('value')
+        underlying_nodes = []
+        for slot in node_slots:
+            bound_nid = bound_nodes.get(slot['name'])
+            underlying_nodes.append({
+                'name': slot['name'],
+                'description': slot.get('description', ''),
+                'type': slot.get('type'),
+                'node_id': bound_nid if bound_nid in all_node_names else None,
+            })
+
         rf_node = {
             'id': nid,
             'type': 'ioNode',
@@ -616,6 +649,7 @@ def get_graph():
                 # the binding part DOES round-trip on save (see save_graph),
                 # unlike is_kwui above.
                 'underlying_groups': underlying_groups,
+                'underlying_nodes': underlying_nodes,
             },
         }
         if group:
@@ -948,6 +982,15 @@ async def save_graph(request_data: dict):
                 for s in n.get('data', {}).get('underlying_groups', []) or []
             ],
         }
+        # Underlying-NODE slot bindings round-trip like `groups` above, but the
+        # key is only written for nodes that actually have slots — so a
+        # pipeline without any stays byte-identical on save.
+        un_slots = n.get('data', {}).get('underlying_nodes', []) or []
+        if un_slots:
+            node_entry['underlying_nodes'] = [
+                {'name': s['name'], 'value': s.get('node_id')}
+                for s in un_slots
+            ]
         if parent:
             node_entry['gui']['group'] = parent
 

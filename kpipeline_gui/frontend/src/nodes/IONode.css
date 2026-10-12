@@ -269,3 +269,47 @@
      other alpha-blended color in this codebase is computed in JS). */
   box-shadow: 0 0 5px 1px var(--chip-color, #4a5568), 0 0 9px 2px var(--chip-glow, transparent);
 }
+
+/* Underlying-NODE chip: reuses .io-group-chip's look (outlined in the bound
+   node's color); only adds single-line truncation, since "slot → node" is
+   longer than a bare group label. */
+.io-node-chip {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Active underlying node: highlight ring in the node's own color (--ul-ring,
+   set in IONode.jsx). Composed with the selection ring so both stay visible. */
+.io-node-ul-active {
+  box-shadow: 0 0 0 2px var(--ul-ring, #a0aec0), 0 0 10px 2px var(--ul-glow, rgba(160,174,192,.6));
+}
+.io-node-ul-active.io-node-selected {
+  box-shadow: 0 0 0 2px #7c63ed, 0 0 0 5px var(--ul-ring, #a0aec0), 0 0 12px 3px var(--ul-glow, rgba(160,174,192,.6));
+}
+
+/* Inactive underlying node: same hatch as GroupNode.css's .group-disabled-overlay.
+   Anchored to React Flow's node wrapper (same box as .io-node); pointer-events
+   stay on, which is what blocks clicks reaching the node's content. */
+.io-disabled-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  border-radius: 6px;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(10, 12, 16, 0.5),
+    rgba(10, 12, 16, 0.5) 8px,
+    rgba(10, 12, 16, 0.22) 8px,
+    rgba(10, 12, 16, 0.22) 16px
+  );
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+/* Keep a disabled node's OWN chips (if it also owns slots) above its overlay. */
+.io-underlying-groups {
+  position: relative;
+  z-index: 11;
+}
