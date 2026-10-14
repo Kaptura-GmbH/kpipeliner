@@ -8,9 +8,50 @@ import inspect
 import argparse
 import logging
 import traceback
+import queue
+import threading
+import time
 from datetime import datetime
 
 from kpipeline.src.kparameter import KParameter
+
+
+class _LineReader:
+    """`process.stdout.readline()` for a node of a kwui run.
+
+    Plain readline() only returns '' (EOF) once EVERY holder of the pipe's write end
+    has closed it. A node that starts a helper which inherits its stdout and keeps
+    running (a daemonized service, a vendor tool) would therefore look "still running"
+    after its own process has long exited — and the workflow could never leave the
+    step. This reader gives up on the pipe once the node's own process has exited and
+    nothing more has arrived for `grace` seconds; whatever the helper keeps running is
+    left alone (a Reset / jump back stops it, see KwuiBridge.stop_leftovers).
+    Used for kwui runs only — a plain `kpl run` still uses readline() unchanged."""
+
+    def __init__(self, process, grace=1.0):
+        self._process = process
+        self._grace = grace
+        self._lines = queue.Queue()
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self):
+        try:
+            for line in iter(self._process.stdout.readline, ''):
+                self._lines.put(line)
+        except Exception:
+            pass
+        self._lines.put('')
+
+    def readline(self):
+        exited_at = None
+        while True:
+            try:
+                return self._lines.get(timeout=0.2)
+            except queue.Empty:
+                if self._process.poll() is not None:
+                    exited_at = exited_at or time.time()
+                    if time.time() - exited_at >= self._grace:
+                        return ''
 
 
 class NodeState:
@@ -398,6 +439,7 @@ class KNode:
         self.requirements = None
         self.log_level = 'INFO'
         self.kwui = False
+        self.on_error = 'stop'
         self.ui = None
         self._logger = None
         self._real_stdout = None
@@ -492,6 +534,10 @@ class KNode:
         self.description = cfg.get('description', '')
         self.category = cfg.get('category', 'General')
         self.kwui = bool(cfg.get('kwui', False))
+        # `on_error: skip` — in a kwui run a CRASH of this node type (exit code != 0)
+        # is shown on its step but the workflow carries on, like end("ERROR_SKIP").
+        # Anything else (default) stops the workflow at the failing step.
+        self.on_error = str(cfg.get('on_error', 'stop')).strip().lower()
         # Declared group SLOTS for this node TYPE — same shape as self.inputs/
         # self.outputs above: a name declared here, a per-INSTANCE value
         # merged in from graph_config.yaml's `groups: [{name, value}]` list
@@ -887,6 +933,24 @@ class KNode:
             if widget_names:
                 run_env = dict(os.environ, **{WIDGETS_ENV: ','.join(widget_names)})
 
+        # kwui run CONTROL (Reset / jump / stop): applies to EVERY node of a kwui run —
+        # UI or not, a data-dependency helper too — unlike the UI wiring above, which
+        # exists only for `kwui: true` nodes. Each run's process gets a unique marker
+        # in its environment, inherited by everything it starts (even a child that
+        # detaches or is re-parented to init), so the whole lot can be found and
+        # stopped. The module is only loaded during a kwui run, so a plain
+        # `kpl run` never gets here (control stays None) and is unchanged.
+        control = None
+        run_token = None
+        kwui_module = sys.modules.get('kpipeline.src.kwui')
+        if kwui_module is not None:
+            control = kwui_module.get_active_bridge()
+        if control is not None:
+            import uuid
+            run_token = uuid.uuid4().hex
+            run_env = dict(run_env if run_env is not None else os.environ,
+                           **{kwui_module.RUN_TOKEN_ENV: run_token})
+
         cmd = (
             f'{python_prefix} {self.node_dir}/node.py '
             f'--uuid {uuid_val} '
@@ -911,13 +975,16 @@ class KNode:
                 env=run_env,   # None -> inherit, exactly as before kwui existed
                 universal_newlines=True
             )
+            if control is not None:
+                control.track_process(process, run_token, self.name)
             if bridge is not None:
                 bridge.attach(self.name, process.stdin)
 
             progress_bars = {}
+            reader = _LineReader(process) if control is not None else None
             try:
                 while True:
-                    line = process.stdout.readline()
+                    line = reader.readline() if reader is not None else process.stdout.readline()
                     if line == '' and process.poll() is not None:
                         break
                     if not line:
@@ -962,6 +1029,8 @@ class KNode:
             finally:
                 for pb in progress_bars.values():
                     pb.close()
+                if control is not None:
+                    control.untrack_process()
                 if bridge is not None:
                     bridge.detach(self.name)
                     try:
@@ -971,7 +1040,7 @@ class KNode:
 
             ret = process.poll()
             if bridge is None:
-                return ret
+                return self._maybe_skip_error(control, ret)
 
             ui_status = bridge.consume_status(self.name)
             if ret == 0 and ui_status == STATUS_REPEAT:
@@ -985,8 +1054,18 @@ class KNode:
                     pass
                 continue
             if ret == 0 and ui_status == STATUS_ERROR:
-                return 1
-            return ret
+                return 1  # an explicit end("ERROR"): the node's own choice is to stop
+            return self._maybe_skip_error(control, ret)
+
+    def _maybe_skip_error(self, control, ret):
+        """`on_error: skip` (kwui runs only): a crashed node counts as done — the step
+        shows the error, the workflow goes on. A node stopped on purpose (Reset /
+        jump) is not a crash, and everything else keeps its exit code."""
+        if (ret != 0 and control is not None and getattr(self, 'on_error', 'stop') == 'skip'
+                and not control._user_abort_pending()):
+            control.note_error_skip(self.name, f'crashed (exit code {ret})')
+            return 0
+        return ret
 
     def install_env(self):
         """Install the node's Python environment."""

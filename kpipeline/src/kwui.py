@@ -92,14 +92,21 @@ def _decode_bytes_value(value):
 STATUS_OKAY = 'OKAY'
 STATUS_ERROR = 'ERROR'
 STATUS_REPEAT = 'REPEAT'
+#: Like ERROR as far as the step icon goes, but the workflow carries on with the next
+#: step: the node counts as done (exit code 0), only the tracker shows "error".
+STATUS_ERROR_SKIP = 'ERROR_SKIP'
+#: Only ever produced by end('JUMP', <node>) / jump_to(<node>) — `end('JUMP')`
+#: WITHOUT a target is still just a data message (status OKAY), as before.
+STATUS_JUMP = 'JUMP'
 
 
 def _status_of(msg):
     """The runner-facing status for an `end(msg)` argument: OKAY / ERROR /
-    REPEAT when msg says so (case-insensitive), OKAY for any other message —
-    arbitrary messages are data for `interact()`, not an outcome."""
+    ERROR_SKIP / REPEAT when msg says so (case-insensitive), OKAY for any other
+    message — arbitrary messages are data for `interact()`, not an outcome."""
     status = str(msg).strip().upper()
-    return status if status in (STATUS_OKAY, STATUS_ERROR, STATUS_REPEAT) else STATUS_OKAY
+    known = (STATUS_OKAY, STATUS_ERROR, STATUS_ERROR_SKIP, STATUS_REPEAT)
+    return status if status in known else STATUS_OKAY
 
 # The node subprocess may run in its own venv without kwebui, so it cannot ask
 # the registry which widgets exist. The parent puts the list in this env var
@@ -109,7 +116,7 @@ def _status_of(msg):
 WIDGETS_ENV = 'KPL_KWUI_WIDGETS'
 
 #: UIProxy's own methods — valid on `self.ui` but not widget names.
-_UI_METHODS = ('interact', 'end', 'clear')
+_UI_METHODS = ('interact', 'end', 'clear', 'jump_to')
 
 #: KApp's own methods (kwebui/app.py) — also valid on `self.ui`, but routed to
 #: the app object itself rather than treated as "create a widget of this
@@ -321,20 +328,47 @@ class UIProxy:
             return None
         return self._message
 
-    def end(self, msg=STATUS_OKAY):
+    def end(self, msg=STATUS_OKAY, arg=None, *, target=None, detail=None):
         """Report this node's UI outcome and release a waiting `interact()`,
         which returns `msg` unchanged.
 
         "OKAY" (the default) -> the node succeeded; "ERROR" -> fail the node
-        even if it exits 0; "REPEAT" -> the runner re-executes this node once
-        it exits (matched case-insensitively). Any OTHER message is just data
-        for `interact()`'s caller — the node counts as succeeded.
+        even if it exits 0, which STOPS the workflow at this step; "ERROR_SKIP"
+        -> the step is shown as an error but the workflow carries on with the next
+        step (the node counts as done, so its saved outputs stay usable);
+        "REPEAT" -> the runner re-executes this node once it exits; "JUMP" +
+        a node name -> the node succeeds and the workflow continues at that
+        step/node (earlier or later — see jump_to). All matched case-insensitively.
+        Any OTHER message is just data for `interact()`'s caller — the node counts
+        as succeeded. `end("JUMP")` without a target is such a plain data message.
+
+        The optional second argument depends on the outcome: for "JUMP" it is the
+        target node (`target=` also works); for "ERROR" / "ERROR_SKIP" it is a short
+        text shown under the step in the workflow's step list (`detail=` also works),
+        e.g. `self.ui.end("ERROR_SKIP", "camera not found")`.
         """
         status = _status_of(msg)
+        payload = {'op': 'end', 'status': status}
+        if str(msg).strip().upper() == STATUS_JUMP:
+            goal = target if target else arg
+            if goal:
+                status = STATUS_JUMP
+                payload = {'op': 'end', 'status': STATUS_JUMP, 'target': str(goal)}
+        elif status in (STATUS_ERROR, STATUS_ERROR_SKIP):
+            text = detail if detail is not None else arg
+            if text is not None and str(text).strip():
+                payload['detail'] = str(text).strip()
         self._message = msg
-        self._send({'op': 'end', 'status': status})
+        self._send(payload)
         self._done.set()
         return status
+
+    def jump_to(self, node_name):
+        """Finish this node and continue the workflow at `node_name` — a node
+        of the workflow's sequence, EARLIER (redo from there) or LATER (skip
+        ahead). Same as `end("JUMP", node_name)`. A name that is not in the
+        sequence fails this node with a message listing the valid names."""
+        return self.end(STATUS_JUMP, node_name)
 
     # -- internals ----------------------------------------------------------
 
@@ -465,8 +499,13 @@ class NoopUI:
     def interact(self, timeout=None):
         return STATUS_OKAY
 
-    def end(self, msg=STATUS_OKAY):
+    def end(self, msg=STATUS_OKAY, arg=None, *, target=None, detail=None):
+        if str(msg).strip().upper() == STATUS_JUMP and (target or arg):
+            return STATUS_JUMP
         return _status_of(msg)
+
+    def jump_to(self, node_name):
+        return STATUS_JUMP
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +517,51 @@ _active_bridge = None
 
 def get_active_bridge():
     return _active_bridge
+
+
+# Buttons in workflow.py call these (see kwui_workflow_template.py). They accept
+# and ignore any arguments so they can be passed directly as `on_click=...`, and
+# do nothing outside a live kwui run. (Reloading the browser page is client-side
+# and needs nothing from here — see the template's "Refresh page" button.)
+
+def reset_all(*_args):
+    """Start the whole workflow over from its first step."""
+    bridge = get_active_bridge()
+    if bridge is not None:
+        bridge.reset_all()
+
+
+def restart_step(*_args):
+    """Run the current step again: stops it if it is running (everything it started),
+    and rebuilds its page. After a failure it is the step that failed."""
+    bridge = get_active_bridge()
+    if bridge is not None:
+        bridge.restart_current()
+
+
+def continue_workflow(*_args):
+    """After the workflow stopped on an error, go on with the next step (the failed
+    step stays shown as an error). Does nothing, and says so, if nothing is stopped."""
+    bridge = get_active_bridge()
+    if bridge is not None:
+        bridge.continue_after_error()
+
+
+def refresh_step(*_args):
+    """Kept only so a workflow.py copied from an EARLIER template (button "Refresh
+    step") still imports and runs. A refresh no longer touches the workflow: it is
+    a plain browser reload (F5), done client-side — see the template's "Refresh
+    page" button — so there is nothing for the server to do."""
+    print('[kwui] "Refresh step" no longer restarts a step. Reload the page with F5 '
+          '(or use the "Refresh page" button of the current workflow.py template); '
+          'use "Reset all" to start over.', flush=True)
+
+
+def jump_to_step(node_name):
+    """Continue the workflow at `node_name` (a button of your own can use this)."""
+    bridge = get_active_bridge()
+    if bridge is not None:
+        bridge.request_jump(node_name, 'user')
 
 
 def set_active_bridge(bridge):
@@ -517,7 +601,69 @@ def _jsonable(values):
     return safe
 
 
+#: Environment variable that marks every process started by one node run of a kwui
+#: workflow (value: a unique token) — see KwuiBridge.stop_run / KNode.execute.
+RUN_TOKEN_ENV = 'KPL_KWUI_RUN_TOKEN'
+
+#: After a node asks for a JUMP (end("JUMP", ...) / jump_to) it may keep running
+#: for this many seconds (saving outputs, closing devices); then its processes are
+#: stopped so the workflow can actually move on.
+JUMP_STOP_GRACE = 5.0
+
+#: Pseudo jump target meaning "go on with the step after the one that failed".
+CONTINUE = '__continue__'
+
+#: Page key shared by every node that is not a tracker step (data dependencies
+#: pulled in implicitly) — there is no step to click to reach their page.
+BACKGROUND_PAGE = '__background__'
+
+#: A step can be opened from the tracker once it has started.
+_VIEWABLE = ('in-progress', 'completed', 'error')
+
+
+def _disable_interactive(widget):
+    """Make every widget that has a callback inert (visibly dimmed, and the
+    server drops its events). Cosmetic belt-and-braces on top of the bridge's own
+    stale-event guard — and a no-op on a kwebui without Widget.disable()."""
+    try:
+        if hasattr(widget, 'disable') and any(callable(v) for v in widget.props.values()):
+            widget.disable()
+        for child in widget.children:
+            _disable_interactive(child)
+    except Exception:
+        pass
+
+
+def _stop_activity(widget):
+    """Stop the SERVER-side activity of widgets a node left behind and can no longer
+    end itself. Today that is the timer of `spinner(show_time=True)`: kwebui ticks its
+    elapsed time on the server until the node's `with` block exits — which never
+    happens for a node that was stopped — and every tick broadcasts an update, so
+    after the page was removed the browser would re-create the widget as a stray,
+    still-counting spinner. Exiting it cancels the timer (and shows it as finished)."""
+    try:
+        if getattr(widget, '_tick_task', None) is not None:
+            widget.__exit__(None, None, None)
+        for child in list(widget.children):
+            _stop_activity(child)
+    except Exception:
+        pass
+
+
 class KwuiBridge:
+    """Parent side of the node<->UI bridge: replays a node's widget calls onto
+    workflow.py's `app_container`, relays browser events back down, and — new —
+    owns the workflow's control plane (jump / reset) and, optionally,
+    the per-step page history.
+
+    History (`app.history`, default True; see _history_enabled): each tracker
+    step gets its own page inside `app_container`; only the running step's page
+    is ever written to, the others are merely hidden, so clicking a finished
+    step in the tracker shows what it last displayed. With `history = False`
+    — or a workflow.py that brings its own container/tracker objects — the
+    original behavior applies unchanged: one container, wiped at every node
+    start."""
+
     def __init__(self, tracker, container, app=None):
         self.tracker = tracker
         self.container = container
@@ -527,6 +673,100 @@ class KwuiBridge:
         self._stdin_lock = threading.Lock()
         self._statuses = {}
         self._fresh = True
+        # Stale-event guard: every attach() (= every node run) gets a token;
+        # a callback remembers the token of the run that created its widget and
+        # is dropped unless that run is the one attached right now.
+        self._run_counter = 0
+        self._live_token = None
+        self._reading_token = None
+        # History pages (see class docstring).
+        self._pages = {}
+        self._target = None
+        self._status = {}
+        self._step_ids = set()
+        self._history = self._history_enabled(app, tracker, container)
+        if self._history:
+            self._init_history()
+        # Control plane: pending jump = (target step, origin 'node' | 'user').
+        self._cond = threading.Condition()
+        self._pending = None
+        self._proc = None
+        self._proc_token = None
+        self._proc_node = None
+        self._error_skipped = set()   # nodes that reported ERROR_SKIP in their current run
+        self._details = {}            # node -> text to show under its step (from end(..., "text"))
+        self._stopped_on = None       # step the workflow is stopped at because of an error (else None)
+        self._skipped_log = []        # steps that ended with a skipped error (for the end-of-run note)
+        self._token_nodes = {}   # run token -> node name, for every node run of this session
+        self._stopper = None
+        self.sequence = []
+        self.current_step = None
+
+    # -- history ------------------------------------------------------------
+
+    @staticmethod
+    def _history_enabled(app, tracker, container):
+        """On unless workflow.py says `history = False` — and only for the
+        plain kwebui widgets the template creates. A workflow.py that hands in
+        its own container/tracker stand-ins (own page management) is left alone."""
+        if not getattr(app, 'history', True):
+            return False
+        try:
+            from kwebui.widget import Widget
+        except Exception:
+            return False
+        return (isinstance(container, Widget) and isinstance(tracker, Widget)
+                and hasattr(container, 'clear'))
+
+    def _init_history(self):
+        try:
+            self._step_ids = {task['id'] for task in self.tracker.props.get('tasks', [])}
+        except Exception:
+            self._step_ids = set()
+        # Attach the tracker click handler unless workflow.py set its own. The
+        # tracker reads `on_select` from its props when a click arrives, and
+        # callables are never sent to the browser, so setting it late is the
+        # same as passing it to workflow_tracker(...).
+        try:
+            if self.tracker.props.get('on_select') is None:
+                self.tracker.update(on_select=self._on_step_select)
+        except Exception:
+            self._history = False
+
+    @property
+    def _out(self):
+        """Where the running node's widgets go: its page, else the container."""
+        return self._target if self._target is not None else self.container
+
+    def _begin_page(self, node_name):
+        if not self._history:
+            return
+        key = node_name if node_name in self._step_ids else BACKGROUND_PAGE
+        page = self._pages.get(key)
+        if page is None:
+            page = self._pages[key] = self.container.container(border=False)
+        self._target = page
+        self._show_page(key)
+
+    def _show_page(self, key):
+        for page_key, page in list(self._pages.items()):
+            try:
+                page.show() if page_key == key else page.hide()
+            except Exception:
+                pass
+
+    def _on_step_select(self, task_id):
+        if self._status.get(task_id) in _VIEWABLE and task_id in self._pages:
+            self._show_page(task_id)
+
+    def _freeze(self, node_name):
+        if not self._history:
+            return
+        page = self._pages.get(node_name if node_name in self._step_ids else BACKGROUND_PAGE)
+        if page is not None:
+            for child in list(page.children):
+                _stop_activity(child)
+                _disable_interactive(child)
 
     # -- node lifecycle -----------------------------------------------------
 
@@ -534,39 +774,296 @@ class KwuiBridge:
         if state == 'RUNNING':
             self._widgets.clear()
             self._fresh = True
+            self._error_skipped.discard(node_name)
+            self._details.pop(node_name, None)
             self._set_step(node_name, 'in-progress')
-            self.container.clear()
+            self._begin_page(node_name)
+            _stop_activity(self._out)
+            self._out.clear()
             # Name the running node — a data dependency pulled in implicitly
             # (not a tracker step) can take a while (env install, heavy
             # compute); a content-free "Working ..." looks identical to a
             # hung page for as long as that takes.
-            self.container.spinner(f'Working ... ({node_name})').update(active=True)
+            self._out.spinner(f'Working ... ({node_name})').update(active=True)
         elif state == 'COMPLETED':
-            self._set_step(node_name, 'completed')
+            if node_name in self._error_skipped:
+                # ERROR_SKIP: done as far as the pipeline is concerned, but the step
+                # shows the error and the workflow simply goes on.
+                self._error_skipped.discard(node_name)
+                if self._set_step(node_name, 'error', self._details.pop(node_name, '')):
+                    if node_name not in self._skipped_log:
+                        self._skipped_log.append(node_name)
+                    print(f"[kwui] Step '{node_name}' ended with ERROR_SKIP: shown as an "
+                          f"error, the workflow continues.", flush=True)
+            else:
+                self._set_step(node_name, 'completed')
+            _stop_activity(self._out)
+            self._freeze(node_name)
         elif state == 'FAILED':
-            self._set_step(node_name, 'error')
+            # A node stopped on purpose (Reset) is not an error.
+            self._error_skipped.discard(node_name)   # it crashed after all: a real failure
+            if not self._user_abort_pending():
+                self._set_step(node_name, 'error', self._details.pop(node_name, ''))
+            else:
+                self._details.pop(node_name, None)
+            _stop_activity(self._out)
+            self._freeze(node_name)
 
-    def _set_step(self, node_name, status):
+    def _set_step(self, node_name, status, detail=''):
+        """Set a step's status; `detail` is the text under it ('' clears it)."""
         try:
-            self.tracker.set_task_status(node_name, status)
+            self.tracker.set_task_status(node_name, status, detail)
+            self._status[node_name] = status
+            return True
         except ValueError:
-            pass  # not a tracker step (a data dependency pulled in implicitly)
+            return False  # not a tracker step (a data dependency pulled in implicitly)
 
-    def attach(self, node_name, stdin):
+    def attach(self, node_name, stdin, process=None):
         with self._stdin_lock:
             self._stdin = stdin
+            self._run_counter += 1
+            self._live_token = self._run_counter
         self._statuses.pop(node_name, None)
+
+    def track_process(self, process, token, node_name=None):
+        """A node's process started (ANY node of the run, UI or not): remember it so
+        a Reset / jump can stop it."""
+        self._proc = process
+        self._proc_token = token
+        self._proc_node = node_name
+        self._token_nodes[token] = node_name
+
+    def untrack_process(self):
+        self._proc = None
+        self._proc_token = None
+        self._proc_node = None
 
     def detach(self, node_name):
         with self._stdin_lock:
             self._stdin = None
+            self._live_token = None
 
     def consume_status(self, node_name):
         return self._statuses.pop(node_name, None)
 
+    # -- control plane: jump / reset ------------------------------------------
+
+    def set_sequence(self, sequence):
+        self.sequence = list(sequence)
+
+    def note_error_skip(self, node_name, why):
+        """A node of this run crashed and its type says `on_error: skip`: treat it exactly
+        like ERROR_SKIP (see KNode.execute). The node's own text, if it gave one, wins."""
+        self._error_skipped.add(node_name)
+        self._details.setdefault(node_name, why)
+
+    def restart_current(self):
+        """Run the current step again (stopping it first if it is running)."""
+        step = self.current_step or (self.sequence[0] if self.sequence else None)
+        if step:
+            self.request_jump(step, 'user')
+
+    def set_stopped_on(self, node_name):
+        with self._cond:
+            self._stopped_on = node_name
+
+    def continue_after_error(self):
+        """Carry on with the next step after the workflow stopped on an error."""
+        with self._cond:
+            if self._stopped_on is None:
+                accepted = False
+            else:
+                accepted = True
+                self._pending = (CONTINUE, 'user', False)
+                self._cond.notify_all()
+        if not accepted:
+            print('[kwui] "Continue" only applies when the workflow has stopped because '
+                  'of an error — nothing to continue.', flush=True)
+        return accepted
+
+    def mark_continued(self, node_name):
+        """The workflow went on past step `node_name`, which had failed."""
+        if node_name not in self._skipped_log:
+            self._skipped_log.append(node_name)
+        print(f"[kwui] Continuing after the error in step '{node_name}'.", flush=True)
+
+    def skipped_error_steps(self):
+        """Steps that ended with ERROR_SKIP in this workflow run (still counted until reset)."""
+        return list(self._skipped_log)
+
+    def begin_step(self, name):
+        with self._cond:
+            self.current_step = name
+
+    def request_jump(self, target, origin):
+        """Ask the run loop to continue at `target` (a node of the sequence).
+        origin 'node': the node asked via end('JUMP', ...) and ends by itself.
+        origin 'user': Reset — the running node is stopped (everything it started). Returns False, with a message, for an unknown target."""
+        if target not in self.sequence:
+            print(f"[kwui] cannot jump to {target!r}: not in the workflow sequence "
+                  f"({', '.join(self.sequence) or 'empty'}).", flush=True)
+            return False
+        with self._cond:
+            self._pending = (target, origin, False)   # (target, origin, forced stop)
+            proc, token, node = self._proc, self._proc_token, self._proc_node
+            self._cond.notify_all()
+        if proc is not None:
+            # In a thread: waiting for the processes to die must not block the
+            # caller (the browser-event handler / the node's output reader).
+            if origin == 'user':
+                target_fn, args = self.stop_run, (proc, token)
+            else:
+                target_fn, args = self._jump_watchdog, (proc, token, node)
+            self._stopper = threading.Thread(target=target_fn, args=args, daemon=True)
+            self._stopper.start()
+        return True
+
+    def _jump_watchdog(self, proc, token, node_name):
+        """The node asked to jump: let it exit by itself (it may still be saving
+        something) for JUMP_STOP_GRACE seconds, then stop it and everything it
+        started — otherwise a node that keeps its process alive would hold the
+        workflow on this step forever."""
+        deadline = time.time() + JUMP_STOP_GRACE
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                return
+            time.sleep(0.1)
+        if proc.poll() is None:
+            with self._cond:
+                if self._pending is not None:
+                    self._pending = (self._pending[0], self._pending[1], True)
+            print(f"[kwui] Node {node_name!r} asked for a jump but its process kept running "
+                  f"for {JUMP_STOP_GRACE:g}s - stopping it.", flush=True)
+            self.stop_run(proc, token)
+
+    def reset_all(self):
+        """Start over from the first step."""
+        if self.sequence:
+            self.request_jump(self.sequence[0], 'user')
+
+    def _user_abort_pending(self):
+        """A stop is under way on purpose (the user's Reset, or a jump's grace period
+        ran out) — the node ending then is not an error."""
+        with self._cond:
+            return self._pending is not None and (self._pending[1] == 'user' or self._pending[2])
+
+    def take_jump(self, ok=True):
+        """The pending jump target, if any (consuming it). A node that asked
+        for a jump but then FAILED stays a failure; a user's Reset
+        always counts — the node was stopped on purpose."""
+        with self._cond:
+            pending, self._pending = self._pending, None
+        if pending is None:
+            return None
+        target, origin, forced = pending
+        return None if (origin == 'node' and not ok and not forced) else target
+
+    def wait_for_jump(self):
+        """Block until a jump is requested (the workflow has finished or
+        stopped on a failure); returns its target."""
+        with self._cond:
+            while self._pending is None:
+                self._cond.wait()
+            pending, self._pending = self._pending, None
+        return pending[0]
+
+    def reset_steps(self, names):
+        """Steps `names` start over: tracker back to pending, pages dropped."""
+        background = self._pages.get(BACKGROUND_PAGE)
+        if background is not None:
+            _stop_activity(background)
+        for name in names:
+            self._set_step(name, 'pending')
+            self._status.pop(name, None)
+            if name in self._skipped_log:
+                self._skipped_log.remove(name)
+            page = self._pages.pop(name, None)
+            if page is not None:
+                _stop_activity(page)
+                if self._target is page:
+                    self._target = None
+                try:
+                    page.remove()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _run_processes(process, token):
+        """Every process belonging to one node run: the shell kpl started and its
+        whole tree, PLUS anything else carrying the run's marker in its environment
+        (a child that detached or was re-parented to init is no longer in the tree
+        but still has the marker)."""
+        import psutil
+        found = {}
+        try:
+            if process is not None and process.poll() is None:  # else its pid may already belong to someone else
+                parent = psutil.Process(process.pid)
+                for proc in [parent] + parent.children(recursive=True):
+                    found[proc.pid] = proc
+        except Exception:
+            pass
+        if token:
+            me = os.getpid()
+            for proc in psutil.process_iter():
+                if proc.pid == me or proc.pid in found:
+                    continue
+                try:
+                    if proc.environ().get(RUN_TOKEN_ENV) == token:
+                        found[proc.pid] = proc
+                except Exception:
+                    continue  # gone meanwhile, or not ours to inspect
+        alive = []
+        for proc in found.values():
+            try:
+                if proc.status() != 'zombie':
+                    alive.append(proc)
+            except Exception:
+                continue
+        return alive
+
+    def stop_run(self, process, token, grace=2.0, limit=10.0):
+        """Stop a node run for good: SIGTERM to everything belonging to it, SIGKILL
+        for whatever is still there after `grace` seconds, repeated until nothing
+        is left or `limit` seconds are up (then say what could not be stopped)."""
+        start = time.time()
+        while True:
+            victims = self._run_processes(process, token)
+            if not victims:
+                return
+            elapsed = time.time() - start
+            if elapsed > limit:
+                names = ', '.join(f"{p.pid} ({' '.join(p.cmdline())[:60]})" for p in victims)
+                print(f'[kwui] WARNING: could not stop: {names}', flush=True)
+                return
+            for proc in victims:
+                try:
+                    proc.kill() if elapsed >= grace else proc.terminate()
+                except Exception:
+                    pass
+            time.sleep(0.2)
+
+    def stop_leftovers(self, names):
+        """Stop whatever earlier runs of nodes `names` left behind (a helper a finished
+        step started and never ended, ...). Called when those nodes are about to run
+        AGAIN, so a second copy can never pile up next to — or fight with — the first.
+        Nothing is running at that moment, so everything found is a leftover."""
+        tokens = [tok for tok, node in self._token_nodes.items() if node in names]
+        for token in tokens:
+            self.stop_run(None, token)
+            self._token_nodes.pop(token, None)
+
+    def await_stopped(self, timeout=15.0):
+        """Wait until a user-requested stop (Reset) has really finished, so the
+        step that restarts can never overlap with the one being stopped."""
+        stopper = self._stopper
+        if stopper is not None:
+            stopper.join(timeout)
+            self._stopper = None
+
     # -- node -> browser ----------------------------------------------------
 
     def handle_line(self, node_name, line):
+        self._reading_token = self._live_token
         try:
             payload = line.split(KWUI_OPEN, 1)[1].rsplit(KWUI_CLOSE, 1)[0].strip()
             message = json.loads(payload)
@@ -584,7 +1081,14 @@ class KwuiBridge:
         elif op == 'clear':
             self._clear()
         elif op == 'end':
-            self._statuses[node_name] = message.get('status')
+            status = message.get('status')
+            if status == STATUS_JUMP and not self.request_jump(message.get('target'), 'node'):
+                status = STATUS_ERROR  # unknown target: fail the node, loudly (message printed above)
+            if status == STATUS_ERROR_SKIP:
+                self._error_skipped.add(node_name)
+            if message.get('detail'):
+                self._details[node_name] = message['detail']
+            self._statuses[node_name] = status
 
     def _create(self, message):
         if self._fresh:
@@ -596,7 +1100,7 @@ class KwuiBridge:
         args = [self._decode(widget_id, v) for v in (message.get('args') or [])]
         kwargs = {k: self._decode(widget_id, v)
                   for k, v in (message.get('kwargs') or {}).items()}
-        factory = getattr(self.container, widget_type, None)
+        factory = getattr(self._out, widget_type, None)
         if factory is None:
             print(f'[kwui] unknown widget type {widget_type!r}', flush=True)
             return
@@ -688,7 +1192,8 @@ class KwuiBridge:
             print(f"[kwui] KApp.{method_name} failed: {exc}", flush=True)
 
     def _clear(self):
-        self.container.clear()
+        _stop_activity(self._out)
+        self._out.clear()
         self._widgets.clear()
         self._fresh = False
 
@@ -697,17 +1202,23 @@ class KwuiBridge:
     def _decode(self, widget_id, value):
         if isinstance(value, dict) and CB_MARKER in value:
             name = value[CB_MARKER]
-            return lambda *args: self._send_event(widget_id, name, args)
+            token = self._reading_token
+            return lambda *args: self._send_event(widget_id, name, args, token)
         if isinstance(value, dict) and BYTES_MARKER in value:
             return _decode_bytes_value(value)
         return value
 
-    def _send_event(self, widget_id, callback_name, args):
+    def _send_event(self, widget_id, callback_name, args, token=None):
         payload = json.dumps({'op': 'event', 'id': widget_id,
                               'cb': callback_name, 'args': _jsonable(list(args))})
         with self._stdin_lock:
             stdin = self._stdin
             if stdin is None:
+                return
+            # A widget of an EARLIER node run (an old page, a previous REPEAT) must
+            # never reach the node running now: widget ids are numbered per node
+            # process, so the same id/callback key may exist in both.
+            if token is not None and token != self._live_token:
                 return
             try:
                 stdin.write(payload + '\n')
@@ -843,8 +1354,14 @@ def _open_when_ready(app, url, timeout=60):
 
 
 def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
-                port=DEFAULT_PORT, open_browser=True, log_level='warning'):
+                port=DEFAULT_PORT, open_browser=True, log_level='warning',
+                invalidate=None, skip=None, accept=None):
     """Serve workflow.py's kwebui app and run `sequence` through `run_one`.
+
+    `invalidate(names)` (optional) is called before steps `names` are run AGAIN
+    after a jump / Reset, so the caller can forget their earlier results;
+    `skip(names)` (optional) when a forward jump passes over steps `names`;
+    `accept(name)` (optional) when the workflow goes on past a step that had failed.
 
     Blocks until interrupted: the server stays up after the pipeline finishes
     so the final tracker/container state remains visible. That is also why the
@@ -857,7 +1374,9 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
         raise RuntimeError(f'{WORKFLOW_FILE}: build() must set self.tracker '
                            f'(a workflow_tracker) and self.app_container (a container).')
 
-    set_active_bridge(KwuiBridge(tracker, container, app))
+    bridge = KwuiBridge(tracker, container, app)
+    bridge.set_sequence(sequence)
+    set_active_bridge(bridge)
 
     requested_port = port
     port = _find_free_port(host, requested_port)
@@ -881,13 +1400,67 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
         if lan_ip:
             print(f'On the network → http://{lan_ip}:{port}', flush=True)
 
+    def restart_at(target, current):
+        """Index to continue at after a jump from step index `current`: forget the
+        results of `target` and every later step, and put them back to pending in
+        the tracker; steps jumped OVER (forward jump) are reported as skipped."""
+        bridge.await_stopped()
+        index = sequence.index(target)
+        names = sequence[index:]
+        print(f"\n[kwui] Continuing at step '{target}' ...", flush=True)
+        stale = invalidate(names) if invalidate is not None else None
+        bridge.stop_leftovers(set(names) | set(stale or ()))
+        if index > current + 1 and skip is not None:
+            skip(sequence[current + 1:index])
+        bridge.reset_steps(names)
+        return index
+
     def pipeline():
         _wait_for_browser(app)
-        for name in sequence:
-            if not run_one(name):
-                print(f"\n[FAILED] Pipeline stopped at node '{name}'.", flush=True)
-                return
-        print('\n[OK] Pipeline finished. Press CTRL+C to stop the UI.', flush=True)
+        index = 0
+        while True:
+            failed = None
+            while index < len(sequence):
+                # A Reset that arrived between two steps.
+                early = bridge.take_jump(True)
+                if early == CONTINUE:      # a stale Continue (the workflow is running): nothing to do
+                    early = None
+                if early is not None:
+                    index = restart_at(early, index)
+                    continue
+                name = sequence[index]
+                bridge.begin_step(name)
+                ok = run_one(name)
+                # end('JUMP', ...) from the node, or a Reset that stopped it.
+                target = bridge.take_jump(ok)
+                if target == CONTINUE:
+                    target = None
+                if target is not None:
+                    index = restart_at(target, index)
+                    continue
+                if not ok:
+                    failed = name
+                    break
+                index += 1
+            if failed is not None:
+                print(f"\n[FAILED] Pipeline stopped at node '{failed}'.", flush=True)
+            else:
+                print('\n[OK] Pipeline finished. Press CTRL+C to stop the UI.', flush=True)
+                if bridge.skipped_error_steps():
+                    print('[kwui] Steps that ended with a skipped error (ERROR_SKIP): '
+                          + ', '.join(bridge.skipped_error_steps()), flush=True)
+            # The window stays open: Reset all / Restart step (or a late jump) start it
+            # again, and Continue goes on past a step that stopped the workflow.
+            bridge.set_stopped_on(failed)
+            target = bridge.wait_for_jump()
+            bridge.set_stopped_on(None)
+            if target == CONTINUE and failed is not None:
+                if accept is not None:
+                    accept(failed)
+                bridge.mark_continued(failed)
+                index += 1
+            else:
+                index = restart_at(target, index)
 
     threading.Thread(target=pipeline, daemon=True).start()
     if open_browser:

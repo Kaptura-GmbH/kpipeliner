@@ -105,6 +105,17 @@ from kpipeline.src.kbase_nodes import (  # noqa: E402
 from kpipeline.src.kpaths import read_configured_dirs  # noqa: E402
 
 
+def _pid_alive(pid):
+    """Whether a process with this pid exists (a pid we may not signal still exists)."""
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Pipeliner class
 # ---------------------------------------------------------------------------
@@ -114,6 +125,16 @@ class Pipeliner:
 
     def __init__(self):
         self._executed_nodes = []
+        # Nodes whose cached result must NOT be reused although it exists on disk:
+        # set by invalidate_for_rerun() when a kwui workflow jumps back/forward or
+        # is reset, so a dependent that is pulled in again recomputes from the new
+        # upstream result. Always empty outside that (so every other run path is
+        # unchanged); a node leaves it once it has run again.
+        self._force_rerun = set()
+        # Steps a kwui workflow jumped OVER (forward jump): not pulled in as an
+        # ordering-only (jump-link) predecessor of a later step; they still run if
+        # a later step needs their DATA (nodes.X.Y). Empty outside kwui.
+        self._skipped_steps = set()
         # Nodes currently being resolved somewhere up the run_node() call
         # stack — guards the jump-forward cascade below against re-entering a
         # node that's already in progress (e.g. a jump-successor chain that
@@ -424,8 +445,50 @@ class Pipeliner:
             # Debug runs want uvicorn's request log too; a normal run keeps the
             # terminal on the pipeline's own output.
             log_level='info' if debug else 'warning',
+            invalidate=lambda names: self.invalidate_for_rerun(graph, names),
+            skip=self.mark_skipped,
+            accept=self.accept_failed,
         )
         return True
+
+    def accept_failed(self, name):
+        """A kwui workflow went on past step `name`, which had failed: for the rest of
+        the run it counts as done (it will not be started again just because a later
+        step reads its outputs), exactly like a step that ended with ERROR_SKIP."""
+        if name not in self._executed_nodes:
+            self._executed_nodes.append(name)
+        self._force_rerun.discard(name)
+
+    def mark_skipped(self, names):
+        """A kwui workflow jumped forward over steps `names`: they are not run
+        just because a later step comes after them (see _skipped_steps)."""
+        self._skipped_steps |= set(names)
+
+    def invalidate_for_rerun(self, graph, names):
+        """A kwui workflow is about to run steps `names` AGAIN (a jump or Reset).
+        Forget that they — and everything that depends on them, e.g. a helper
+        node computing from a step's output — already ran, and stop
+        trusting their cached results, so the second pass recomputes from the new
+        upstream results instead of reusing stale ones. Nothing is deleted from
+        disk (the cache is simply not used for these nodes until they ran again)."""
+        dependents = {n.name: set() for n in graph.nodes}
+        for node in graph.nodes:
+            for dep in graph.get_dependencies(node.name):
+                if dep in dependents:
+                    dependents[dep].add(node.name)
+        stale, queue = set(), list(names)
+        while queue:
+            current = queue.pop()
+            if current in stale:
+                continue
+            stale.add(current)
+            queue.extend(dependents.get(current, ()))
+        self._executed_nodes[:] = [n for n in self._executed_nodes if n not in stale]
+        self._force_rerun |= stale
+        self._skipped_steps -= stale
+        for name in sorted(stale):
+            self._on_state_change(name, NodeState.PENDING)
+        return sorted(stale)
 
     def run_node(self, node_name, graph=None, params_list=None, use_cache=False,
                  debug=False, show_kpl=True, show_kpm=False, recursive=True,
@@ -492,8 +555,11 @@ class Pipeliner:
             if not recursive:
                 print(f'  Warning: jump-after {jump_src} but recursive=False.')
                 continue
+            if jump_src in self._skipped_steps:
+                continue
             src_node = graph.get_node(jump_src)
-            if use_cache and src_node and self._has_output_cache(src_node, graph):
+            if (use_cache and jump_src not in self._force_rerun
+                    and src_node and self._has_output_cache(src_node, graph)):
                 if jump_src not in self._executed_nodes:
                     self._executed_nodes.append(jump_src)
                 continue
@@ -545,7 +611,7 @@ class Pipeliner:
                     ref_node = graph.get_node(ref_node_id)
                     if ref_node:
                         has_cache = None
-                        if use_cache:
+                        if use_cache and ref_node_id not in self._force_rerun:
                             has_cache = ref_node.outputs[ref_out_name].get_cached_value(
                                 uuid_val, ref_node_id, graph.get_cache_dir()
                             ) if ref_out_name in ref_node.outputs else None
@@ -616,6 +682,8 @@ class Pipeliner:
         node.state = NodeState.COMPLETED
         self._on_state_change(node_name, NodeState.COMPLETED)
         self._executed_nodes.append(node_name)
+        self._force_rerun.discard(node_name)
+        self._skipped_steps.discard(node_name)
         print(f'[OK] {node_name}')
 
         # A node with no declared outputs never calls save_output(), so
@@ -651,7 +719,21 @@ class Pipeliner:
         Read by the GUI server of the same workdir to passively highlight
         externally running nodes. The pid lets readers detect stale files
         (writer no longer alive) and `source` distinguishes terminal runs
-        from GUI-spawned ones (which the GUI already tracks via stdout)."""
+        from GUI-spawned ones (which the GUI already tracks via stdout).
+
+        A `kpl` started BY a node of a kwui run (GroupRef/NodeRef.run, a node that
+        calls kpl itself) does not write it: that file belongs to the kwui run, whose
+        pid is the one that stays alive. A nested writer would replace it with its own
+        pid and states, and once it ended the GUI would see a dead writer and stop
+        highlighting the step that is still running. Instead it records its own entry
+        in cache/run_state_nested.json (see _write_nested_run_state), so the GUI can
+        highlight the kwui step AND the nodes the nested run is executing. kpl marks
+        the node processes of a kwui run with this variable (see KNode.execute /
+        kwui.RUN_TOKEN_ENV); it is absent in every other run, which is therefore
+        unchanged."""
+        if os.environ.get('KPL_KWUI_RUN_TOKEN'):
+            self._write_nested_run_state()
+            return
         cache_dir, _ = read_configured_dirs(os.getcwd())
         path = os.path.join(cache_dir, 'run_state.json')
         try:
@@ -665,6 +747,40 @@ class Pipeliner:
                     'states': self._node_states,
                 }, f)
             os.replace(tmp, path)
+        except Exception:
+            pass  # state mirroring must never break a run
+
+    def _write_nested_run_state(self):
+        """A nested kpl's own entry (pid -> node states) in cache/run_state_nested.json.
+
+        Several processes may write this file, so every update is a read-modify-write
+        under an exclusive lock; each process only ever touches ITS OWN entry (and drops
+        entries of processes that no longer exist), which is why — unlike sharing the
+        main run_state.json — nothing can be lost or left standing by a race. The GUI
+        reads the entries of live processes only, so a nested run that was killed
+        (Reset) leaves nothing highlighted."""
+        cache_dir, _ = read_configured_dirs(os.getcwd())
+        path = os.path.join(cache_dir, 'run_state_nested.json')
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(path + '.lock', 'a') as lock:
+                try:
+                    import fcntl
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                except ImportError:
+                    pass  # no flock on this platform: write unlocked
+                try:
+                    with open(path) as f:
+                        procs = (json.load(f) or {}).get('procs') or {}
+                except (OSError, ValueError):
+                    procs = {}
+                procs = {pid: entry for pid, entry in procs.items() if _pid_alive(pid)}
+                procs[str(os.getpid())] = {'updated': time.time(),
+                                           'states': dict(self._node_states)}
+                tmp = f'{path}.{os.getpid()}.tmp'
+                with open(tmp, 'w') as f:
+                    json.dump({'procs': procs}, f)
+                os.replace(tmp, path)
         except Exception:
             pass  # state mirroring must never break a run
 

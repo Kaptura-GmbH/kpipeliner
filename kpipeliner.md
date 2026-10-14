@@ -181,6 +181,9 @@ version: "1.0"
 description: "One line describing what this node does."   # shown in kpl list / GUI
 category: "General"     # GUI grouping; category gpu|training|inference => uses a GPU worker slot
 kwui: false             # optional: true => this node builds a web UI via self.ui (see §7)
+# on_error: skip        # optional, kwui runs only (see §7.3): a CRASH of this node type is shown on
+#                       # its step but the workflow carries on, like self.ui.end("ERROR_SKIP");
+#                       # default "stop". An explicit self.ui.end("ERROR") always stops.
 
 inputs:
   - name: src_file          # \w+ only
@@ -627,6 +630,11 @@ two attributes in `build()`:
 - `self.tracker` — a `workflow_tracker` whose task **ids are node names**
 - `self.app_container` — the `container` each running node's `self.ui` writes into
 
+Optional: a class attribute `history` on the `KApp` subclass — `True` (the default
+when it is left out) lets the user click a finished step in the tracker to see what
+that node displayed; `False` shows only the running step, as before. The template
+from `kpl kwui init` also has **Refresh page**, **Restart step**, **Continue** and **Reset all** buttons; see 7.3.
+
 `load_tasks()` (from `kpipeline.src.kwui`) fills the tracker from the pipeline's
 **jump-link sequence**: it starts at every node listed in `graph_config.yaml`'s
 top-level `inputs:` and follows each node's jump-out until one has none. A
@@ -729,10 +737,95 @@ class KapNode(KNode):
 | `<handle>[i]` | One column of a `columns` handle (also `len()` / iteration). |
 | `self.ui.clear()` | Wipe everything this node put in the container. |
 | `self.ui.interact(timeout=None)` | Block until `end()` is called; returns exactly the `msg` it was given, unchanged (`None` on timeout). |
-| `self.ui.end(msg)` | Releases `interact()`, which returns `msg`. `OKAY` (success) / `ERROR` (fail the node even on exit 0) / `REPEAT` (re-execute the node) are matched case-insensitively; any other message (str, dict, number...) counts as success and is just data for `interact()`'s caller. |
+| `self.ui.end(msg)` | Releases `interact()`, which returns `msg`. `OKAY` (success) / `ERROR` (fail the node even on exit 0 — the step icon shows an error and the workflow STOPS and waits) / `ERROR_SKIP` (the step icon shows an error but the workflow CONTINUES with the next step; the node counts as done, so outputs it saved stay usable and it is not re-run) / `REPEAT` (re-execute the node) are matched case-insensitively; any other message (str, dict, number...) counts as success and is just data for `interact()`'s caller. |
+| `self.ui.end("JUMP", "node")` / `self.ui.jump_to("node")` | Finish this node and continue the workflow at `node` — earlier (redo from there) or later (skip ahead). See 7.3. `end("JUMP")` without a target is just a data message. |
 | `self.ui.set_theme(name)` / `.on_shutdown(cb)` / `.exit()` | The kwebui app's own methods, not widgets. |
 
-### 7.3 Rules and current limits
+### 7.3 Moving around the workflow — history, JUMP, Refresh, Reset
+
+**History.** With `history = True` (default) every tracker step keeps its own page.
+Clicking a step that has started (running, finished or failed) in the tracker shows
+what that node last displayed; the running node keeps writing to its own page even
+while you look at an old one. Widgets on old pages are disabled, and a click from an
+old page can never reach the node running now. A node that runs again (REPEAT, jump,
+Refresh) gets a fresh page. Data-dependency helper nodes (no tracker step) share one
+"Working ..." page. Only for the plain kwebui `tracker`/`container` that the template
+creates — a `workflow.py` that supplies its own stand-in objects for them is left
+alone and behaves exactly as before. `history = False` restores the old behavior.
+
+**JUMP.** From node code:
+
+```python
+self.ui.jump_to("calibrate")          # same as self.ui.end("JUMP", "calibrate")
+```
+
+The node ends successfully and the workflow continues at `calibrate`, which must be a
+node of the workflow sequence (the jump-link chain, UI step or not). Going **back**
+re-runs that step and every later one; going **forward** skips the steps in between
+(they stay pending and are not run, unless a later step needs one of their outputs via
+`nodes.X.Y`). A name that is not in the sequence fails the node with a message listing
+the valid names. `jump_to(<this node>)` behaves like `REPEAT`. After asking for a jump a node may keep
+running for **5 seconds** (to save outputs, close devices); if its process is still
+alive then, it and everything it started are stopped and the workflow moves on
+(otherwise a node whose process never exits would hold the workflow on its step
+forever). A plain `end("OKAY")` is NOT cut short: the node is waited for as always,
+since many nodes keep working after `interact()` returns. Steps from the target
+onward are reset in the tracker and their old pages dropped; helper nodes that
+compute from a re-run step are recomputed too (cached results of nodes that depend on
+a re-run step are not reused until they have run again — nothing is deleted from
+disk).
+
+**The template's buttons:**
+
+| Button | Effect |
+|---|---|
+| **Refresh page** | Reloads the browser page, exactly like F5. Purely client-side (`onclick="location.reload()"` in an `html` widget): it does not touch the running node, and the page, tracker and history are simply drawn again. |
+| **Restart step** | `restart_step`: stops the running node and runs the CURRENT step again with a freshly built page; earlier steps are untouched. After an error it is the step that failed; after the workflow ended, the last step. |
+| **Continue** | `continue_workflow`: only when the workflow STOPPED because of an error — goes on with the next step; the failed step stays shown as an error and counts as done (a later step reading its outputs does not start it again). Otherwise it does nothing and the terminal says so. |
+| **Reset all** | `reset_all`: stops the running node and starts the whole workflow over from its first step. |
+
+These functions (all from `kpipeline.src.kwui`) and `jump_to_step("node")` (continue at a
+given step) can also be wired to buttons of your own. Stopping covers **every** node of the run — a UI step, a non-UI
+step or a data-dependency helper alike: each node run's processes carry a unique
+marker (`KPL_KWUI_RUN_TOKEN`) in their environment, so the process tree AND anything
+the node started that detached or was re-parented are found, sent SIGTERM and, if still
+there after 2 s, SIGKILL; the next step starts only after they are gone (a message
+lists anything that could not be stopped). A node in the middle of something — a motor
+move, a file write — is cut off, like with CTRL+C. A child that is daemonized AND
+starts with a scrubbed environment cannot be recognized and is not stopped.
+**Errors: stop or carry on.** `self.ui.end("ERROR")` marks the step as an error and stops
+the workflow there (Reset all starts over). `self.ui.end("ERROR_SKIP")` marks the step as
+an error too, but the workflow goes on with the next step. For the pipeline the node is
+*done* — save any outputs before calling it; a later step that reads them gets them, and
+the node is not started again. The terminal says which step ended that way and, when the
+workflow finishes, lists them. If the node then exits with an error code (a crash after
+`end("ERROR_SKIP")`), that is a real failure and the workflow stops.
+
+The second argument of `end()` is a short **text shown under the step icon** for `ERROR` /
+`ERROR_SKIP`: `self.ui.end("ERROR_SKIP", "camera not found")` (or `detail="..."`); it is cleared
+when the step runs again or on Reset. (For `JUMP` the second argument is the target node.)
+
+**Crashes.** A node that crashes without calling `end()` stops the workflow like `ERROR` — Continue
+then goes on, Restart step retries. A node TYPE can decide that its crash should not block:
+`on_error: skip` in its `node_config.yaml` treats a crash like `ERROR_SKIP` (shown on the step, with
+the text "crashed (exit code N)", workflow continues). An explicit `end("ERROR")` still stops.
+
+**What stays on screen:** when a node is stopped (Reset, a jump, a failure) its widgets
+are dropped with its page, and any timed spinner it left (`spinner(show_time=True)`
+ticks its seconds on the server until the node's `with` block exits) is ended first —
+otherwise it would keep counting on the page as a stray widget.
+
+**Leftovers:** a node that finished but left a helper running (a service it started) does
+not hold the workflow — once the node's own process has exited, kpl stops waiting for
+the helper's inherited output pipe after about a second (kwui runs only; a plain
+`kpl run` is unchanged). Such a helper keeps running until the step runs AGAIN (Reset
+all, a jump back): then everything the earlier run of that step left behind is
+stopped first, so copies never pile up.
+After the last step, or after a failure, the workflow stays open and waits: Reset all
+starts over. (`refresh_step` from an earlier template version still imports but only
+prints a hint — a refresh is a browser reload now.)
+
+### 7.4 Rules and current limits
 
 - A node that does **not** call `interact()` just runs to completion, as always —
   nothing in kwui mode blocks by itself.

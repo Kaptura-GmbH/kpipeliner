@@ -309,7 +309,7 @@ The bottom panel shows live per-node progress bars, log lines (color-coded: info
 - **Queue** — nodes waiting to run · **Running** — nodes currently executing
 - **CPU / GPU / MEM** — live utilization of the machine running the server
 
-The GUI also notices pipeline runs started **outside** of it: if you execute `kpl run` in a terminal in the same directory, the node currently running there is highlighted on the canvas with a pulsing glow. This is purely informational — the GUI does not switch into "running" mode and you can still start your own runs from it.
+The GUI also notices pipeline runs started **outside** of it: if you execute `kpl run` in a terminal in the same directory, the node currently running there is highlighted on the canvas with a pulsing glow. This also works for `kpl run --kwui`: while a UI step runs a group (a nested run), the step AND the node of the group that is running right now glow at the same time. This is purely informational — the GUI does not switch into "running" mode and you can still start your own runs from it.
 
 ### 3.6 Marking pipeline inputs & outputs
 
@@ -945,7 +945,7 @@ class KapNode(KNode):
 | `handle.<widget>(...)` | Put a widget **inside** a layout widget (`container`, `columns`' columns, `sidebar`, `topbar`, `empty`). Returns the child's own handle, which stays usable afterwards. |
 | `self.ui.clear()` | Remove everything this node has added. |
 | `self.ui.interact()` | Wait for the user. Returns exactly what `end()` was given (any Python object, unchanged). Optional `timeout=<seconds>`; returns `None` if it elapses. |
-| `self.ui.end(msg)` | Releases `interact()`, which returns `msg`. `"OKAY"` = done, `"ERROR"` = fail this node (stops the pipeline), `"REPEAT"` = run this node again from the start (matched case-insensitively). Any other message — e.g. `self.ui.end("approved")` or `self.ui.end({"choice": 3})` — counts as done and is simply passed back to `interact()`. |
+| `self.ui.end(msg)` | Releases `interact()`, which returns `msg`. `"OKAY"` = done, `"ERROR"` = fail this node (stops the pipeline), `"ERROR_SKIP"` = show an error on this step but carry on with the next one, `"REPEAT"` = run this node again from the start (matched case-insensitively). Any other message — e.g. `self.ui.end("approved")` or `self.ui.end({"choice": 3})` — counts as done and is simply passed back to `interact()`. |
 | `self.ui.set_theme(...)`, `.on_shutdown(...)`, `.exit()` | The page itself, rather than a widget on it. |
 
 **Every kwebui widget is available**: `text`, `button`, `checkbox`, `textedit`,
@@ -982,7 +982,66 @@ A node that never calls `interact()` simply runs through, exactly as in a normal
 run — nothing pauses by itself. While a node **without** `kwui: true` runs, the
 container shows a "Working ..." spinner.
 
-### 8.4 Good to know
+### 8.4 Moving around the workflow: history, jumps, Refresh and Reset
+
+**Looking back.** In the workflow's step list (left), click any step that has already
+started to see what that node showed — its page comes back, with its buttons switched
+off. The running step carries on in the background; click it again to return. This
+is on by default; add `history = False` to the `Workflow` class in `workflow.py` to
+turn it off (then only the running step is shown, as in older versions).
+
+**Stop on an error, or carry on.** `self.ui.end("ERROR")` marks the step with the error
+icon and the workflow stops there and waits (Reset all starts over). `self.ui.end("ERROR_SKIP")`
+marks the step with the error icon too, but the workflow moves on to the next step by
+itself — use it for a problem that should be visible but must not block the rest. The step
+counts as done: save its results before ending, and later steps can use them. If the
+node crashes after `end("ERROR_SKIP")` that is a real failure and the workflow stops.
+
+Add a short text under the step icon with a second argument:
+`self.ui.end("ERROR_SKIP", "camera not found")` (also for `"ERROR"`). It disappears when the
+step runs again or on Reset.
+
+If a node **crashes** without calling `end()`, the workflow stops like for `ERROR`. A node type
+can ask to be skipped instead: put `on_error: skip` in its `node_config.yaml` — a crash is then
+shown on the step ("crashed (exit code N)") and the workflow goes on. An explicit `end("ERROR")`
+still stops it.
+
+**Buttons** in the template's sidebar:
+
+- **Refresh page** — reloads the page in your browser, exactly like pressing F5. It
+  does not touch the running node; use it if the page looks out of date.
+- **Restart step** — stops the step that is running (and anything it started) and runs it
+  again with a fresh page. Earlier steps are not touched. After an error it retries the step
+  that failed.
+- **Continue** — only available when the workflow stopped because of an error: goes on with
+  the next step. The step that failed stays marked as an error, and later steps can still use
+  whatever it saved.
+- **Reset all** — stops whatever is running (every node, including helper nodes
+  without a UI, and anything they started) and starts the whole workflow over from the
+  first step.
+
+A node that is in the middle of something — moving hardware, writing a file — is cut
+off by Reset all, like with CTRL+C. If a step that already finished left a helper
+program running, it is stopped as soon as that step runs again (Reset all, or a jump
+back), so you never end up with two copies. When the workflow has finished or stopped on an
+error, the page stays open and Reset all starts it again.
+
+**Sending the workflow to another step from node code.** A node can finish and send
+the workflow to any other node of the sequence:
+
+```python
+self.ui.jump_to("calibrate")            # same as self.ui.end("JUMP", "calibrate")
+```
+
+Going back re-runs that step and everything after it; going forward skips the steps in
+between (they stay pending). Helper nodes that work from a re-run step are recomputed,
+so later steps never see stale data. A name that is not in the sequence fails the node
+with a message listing the valid ones. After asking for a jump a node has 5 seconds to
+finish what it is doing; if its process is still running then, it is stopped (together
+with anything it started) so the workflow can move on. (`self.ui.end("JUMP")` without a name is just
+a message, as before.)
+
+### 8.5 Good to know
 
 - The same node works in a normal `kpl run`: with no UI attached, `self.ui` quietly
   does nothing and `interact()` returns `"OKAY"` immediately. You never need two

@@ -130,30 +130,44 @@ def _system_stats() -> dict:
 def _external_running() -> list:
     """Node names currently RUNNING in a `kpl run` started OUTSIDE this GUI
     in the same workdir (read from cache/run_state.json, written by kpl on
-    every state change). Purely informational — the GUI only highlights these
-    nodes; its own run controls stay fully available.
+    every state change), plus — for a kwui run whose nodes start nested `kpl`
+    processes (groups) — the nodes those are running (cache/run_state_nested.json,
+    one entry per live process). Purely informational — the GUI only highlights
+    these nodes; its own run controls stay fully available.
 
-    Returns [] when: this GUI has a run of its own in progress, the file is
-    missing/unreadable, the writer was GUI-spawned (source != 'terminal'),
-    or the writer process is no longer alive (stale file, e.g. after Ctrl+C)."""
+    Returns [] when this GUI has a run of its own in progress. Otherwise the main
+    file counts unless it is missing/unreadable, its writer was GUI-spawned
+    (source != 'terminal') or that process is no longer alive (stale file, e.g.
+    after Ctrl+C); nested entries count only while their process is alive."""
     with _run_lock:
         own_run = _run_process is not None and _run_process.poll() is None
     if own_run:
         return []
+    names = set()
     path = os.path.join(_cache_root(), 'run_state.json')
     try:
         with open(path) as f:
             data = json.load(f) or {}
-        if data.get('source') != 'terminal':
-            return []
         pid = data.get('pid')
-        if not isinstance(pid, int):
-            return []
-        os.kill(pid, 0)  # raises OSError if the writer is gone
+        if data.get('source') == 'terminal' and isinstance(pid, int):
+            os.kill(pid, 0)  # raises OSError if the writer is gone
+            names.update(n for n, s in (data.get('states') or {}).items() if s == 'RUNNING')
     except (OSError, ValueError, json.JSONDecodeError):
-        return []
-    states = data.get('states') or {}
-    return sorted(n for n, s in states.items() if s == 'RUNNING')
+        pass
+    try:
+        with open(os.path.join(_cache_root(), 'run_state_nested.json')) as f:
+            procs = (json.load(f) or {}).get('procs') or {}
+        for pid, entry in procs.items():
+            try:
+                os.kill(int(pid), 0)
+            except PermissionError:
+                pass  # exists, just not ours to signal
+            except (OSError, ValueError):
+                continue
+            names.update(n for n, s in ((entry or {}).get('states') or {}).items() if s == 'RUNNING')
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+        pass
+    return sorted(names)
 
 
 def _stats_loop():

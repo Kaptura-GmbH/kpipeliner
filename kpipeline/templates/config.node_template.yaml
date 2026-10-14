@@ -7,6 +7,9 @@ description: "Describe what this node does."
 
 # kwui: true            # give this node a web UI panel via self.ui in a
 #                       # `kpl run --kwui` run (self.ui is None without it)
+# on_error: skip       # with kwui: a CRASH of this node is shown on its step but the
+#                       # workflow carries on (like self.ui.end("ERROR_SKIP")); default
+#                       # "stop". An explicit self.ui.end("ERROR") always stops.
 
 # underlying_groups:      # Declares named GROUP SLOTS this node type can use -
 #   - name: group_a       # same shape as inputs/outputs above, just a name, no
