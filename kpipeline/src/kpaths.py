@@ -102,12 +102,40 @@ def kpl_python_command():
 
 
 def kpl_env(env=None):
-    """Environment for a `kpl` subprocess: the directory that holds the `kpipeline`
-    package is put on PYTHONPATH, so `python -m kpipeline.kpipeline` also works from a
-    checkout that is not installed (harmless when it is)."""
+    """Environment for a `kpl` subprocess. In a source checkout the directory that holds
+    the `kpipeline` package is put on PYTHONPATH, so `python -m kpipeline.kpipeline` also
+    works from a checkout that is not installed. For an installed package nothing is
+    added: PIPELINER_DIR is then site-packages, and exporting it would be inherited by
+    every node and shadow the packages of a node's own venv (numpy, ...)."""
     env = dict(os.environ if env is None else env)
-    env['PYTHONPATH'] = PIPELINER_DIR + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+    if is_checkout():
+        env['PYTHONPATH'] = PIPELINER_DIR + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     return env
+
+
+def node_import_path():
+    """A directory that contains ONLY the `kpipeline` package, for node processes that
+    run in their own venv/conda env (where `from kpipeline import KNode` would otherwise
+    fail). Nodes used to find the package through `sys.path.append(dirname(which('kpl')))`,
+    which only worked while the launcher sat next to the package in the checkout; an
+    installed `kpl` lives in a bin/ directory. Exposing site-packages itself would let the
+    kpl environment's packages shadow the node's own, so this is a directory holding just a
+    symlink `kpipeline -> <package>` under the user cache. Returns None if it can't be made
+    (a checkout then falls back to its root, which holds only the kpipeliner packages)."""
+    import hashlib
+    base = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
+    key = hashlib.sha1(PACKAGE_DIR.encode()).hexdigest()[:10]
+    shim = os.path.join(base, 'kpipeliner', 'pypath-' + key)
+    link = os.path.join(shim, 'kpipeline')
+    try:
+        if os.path.realpath(link) != os.path.realpath(PACKAGE_DIR):
+            os.makedirs(shim, exist_ok=True)
+            if os.path.lexists(link):
+                os.remove(link)  # only ever our own symlink, in our own cache dir
+            os.symlink(PACKAGE_DIR, link, target_is_directory=True)
+        return shim
+    except OSError:
+        return PIPELINER_DIR if is_checkout() else None
 
 
 def mcp_available():

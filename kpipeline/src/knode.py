@@ -951,6 +951,16 @@ class KNode:
             run_env = dict(run_env if run_env is not None else os.environ,
                            **{kwui_module.RUN_TOKEN_ENV: run_token})
 
+        # A node in its own venv/conda/pixi env can't import `kpipeline` by itself (nodes do
+        # `from kpipeline import KNode`): hand it a directory that holds just that package.
+        if python_prefix != sys.executable:
+            from kpipeline.src.kpaths import node_import_path
+            import_path = node_import_path()
+            if import_path:
+                base_env = run_env if run_env is not None else os.environ
+                run_env = dict(base_env, PYTHONPATH=import_path + (
+                    os.pathsep + base_env['PYTHONPATH'] if base_env.get('PYTHONPATH') else ''))
+
         cmd = (
             f'{python_prefix} {self.node_dir}/node.py '
             f'--uuid {uuid_val} '
