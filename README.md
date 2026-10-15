@@ -31,7 +31,7 @@ script). With [uv](https://docs.astral.sh/uv/):
 uv tool install kpipeliner          # `kpl` ends up on your PATH
 kpl --help
 ```
-
+ 
 or into an environment of your own: `uv pip install kpipeliner` (or `pip install kpipeliner`).
 
 Optional extras — nothing imports them unless you use the feature, so leaving them out is fine:
