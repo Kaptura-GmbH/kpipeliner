@@ -7,6 +7,8 @@ name = "kpipeliner"
 dynamic = ["version"]
 description = "kpipeliner (kpl) is a node-based pipeline manager."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 keywords = ["pipeline", "workflow", "nodes", "automation"]
 classifiers = [
@@ -51,7 +53,7 @@ packages = ["kpipeline", "kpipeline_gui"]
 # The source distribution holds only what is needed to rebuild the wheel — not the
 # checkout's own config.yaml (machine-specific), its launcher or installer, or docs.
 [tool.hatch.build.targets.sdist]
-include = ["/kpipeline", "/kpipeline_gui", "/README.md", "/pyproject.toml"]
+include = ["/kpipeline", "/kpipeline_gui", "/README.md", "/LICENSE", "/pyproject.toml"]
 
 [tool.hatch.build]
 exclude = [

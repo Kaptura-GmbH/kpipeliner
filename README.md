@@ -95,3 +95,7 @@ Run any command with `--help` for its full option list.
 - **[kpipeliner.md](kpipeliner.md)** — a self-contained agent guide for
   building pipelines/nodes (also installed as a Claude Code skill).
 - **[Readme](Readme)** — version history / changelog.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
