@@ -47,6 +47,11 @@ kpl = "kpipeline.kpipeline:main"
 [tool.hatch.version]
 source = "vcs"
 
+# PyPI rejects "local" versions (the "+g<hash>" suffix), so builds between releases are
+# plain 1.12.3.devN. A release is a git tag on a clean commit: exactly that tag, e.g. 1.13.0.
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
 [tool.hatch.build.targets.wheel]
 packages = ["kpipeline", "kpipeline_gui"]
 
