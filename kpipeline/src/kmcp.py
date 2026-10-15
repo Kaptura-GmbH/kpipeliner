@@ -24,16 +24,15 @@ import sys
 
 import yaml
 
-PIPELINER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-KPL_ENTRY = os.path.join(PIPELINER_DIR, 'kpipeline.py')
+from kpipeline.src.kpaths import PIPELINER_DIR, config_dir, kpl_env, kpl_python_command
 ALLOWED_NODE_FILES = ('node.py', 'node_config.yaml')
 
 
 def _kpl(args, workdir):
     """Run `kpl <args>` as a subprocess in workdir, capturing output."""
     proc = subprocess.run(
-        [sys.executable, KPL_ENTRY] + list(args),
-        cwd=workdir, capture_output=True, text=True,
+        kpl_python_command() + list(args),
+        cwd=workdir, capture_output=True, text=True, env=kpl_env(),
     )
     return {'returncode': proc.returncode, 'stdout': proc.stdout, 'stderr': proc.stderr}
 
@@ -224,7 +223,7 @@ def read_node_file(workdir, node_type, filename='node.py'):
         return {'error': f'filename must be one of {ALLOWED_NODE_FILES}'}
     from kpipeline.src.kbase_nodes import find_node_dir
     graph = _load_graph(workdir)
-    node_dir = find_node_dir(node_type, PIPELINER_DIR, dirs=graph.get_base_nodes_dirs())
+    node_dir = find_node_dir(node_type, config_dir(), dirs=graph.get_base_nodes_dirs())
     if not node_dir:
         return {'error': f"Node type '{node_type}' not found."}
     path = os.path.join(node_dir, filename)
@@ -243,10 +242,10 @@ def write_node_file(workdir, node_type, filename, content):
     from kpipeline.src.kbase_nodes import find_node_dir, resolve_base_nodes_dirs
     graph = _load_graph(workdir)
     local_dirs = resolve_base_nodes_dirs(
-        PIPELINER_DIR, load_default=False,
+        config_dir(), load_default=False,
         custom_dirs=graph.custom_base_nodes_dirs, pipeline_dir=workdir,
     )
-    node_dir = find_node_dir(node_type, PIPELINER_DIR, dirs=local_dirs)
+    node_dir = find_node_dir(node_type, config_dir(), dirs=local_dirs)
     if not node_dir:
         return {'error': f"'{node_type}' is not a pipeline-local node type "
                           f"(only nodes under this pipeline's "

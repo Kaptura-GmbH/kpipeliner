@@ -452,8 +452,8 @@ class KNode:
 
         if node_type is not None:
             from kpipeline.src.kbase_nodes import find_node_dir
-            # knode.py is at <root>/kpipeline/src/knode.py  →  go up 3 levels
-            pipeliner_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from kpipeline.src.kpaths import config_dir
+            pipeliner_dir = config_dir()
             resolved = find_node_dir(node_type, pipeliner_dir)
             if resolved:
                 self.node_dir = resolved

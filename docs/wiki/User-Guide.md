@@ -28,35 +28,29 @@ This guide covers three workflows:
 
 ### Installation
 
-Clone the repository and run the installer:
+kpipeliner is installed as a Python package — that is all there is to it: the dependencies,
+the prebuilt web GUI (no Node.js needed) and the `kpl` command come with it.
 
 ```bash
-cd kaptura-pipeliner
-./install.sh                       # uses the default python environment
-./install.sh --venv                # creates/uses a venv at ./.venv instead
-./install.sh --venv /path/to/env   # creates (or reuses) a venv at that path
-```
-
-The installer:
-
-- resolves the Python environment kpl itself runs in, and the fallback for any node with
-  no environment of its own: with `--venv`, a virtual environment (created if it doesn't
-  exist yet, reused as-is if it does) at the given path (or `./.venv` if no path is given);
-  without `--venv`, whatever `python3` currently resolves to on your `PATH` — your system
-  Python is untouched only if you pass `--venv`,
-- installs the Python dependencies into that environment,
-- persists the choice to `config.yaml`'s `python_env` (an absolute venv path, or `null` for
-  the default python environment) so it stays consistent across runs — see [Reference](#6-reference),
-- builds the GUI frontend (requires **Node.js/npm**; without it, the CLI still works but `kpl gui` won't),
-- creates the `kpl` launcher and adds the pipeliner directory to your `PATH` (via `~/.bashrc` / `~/.zshrc`).
-
-After installation, restart your terminal (or `source ~/.bashrc`) and verify:
-
-```bash
+uv tool install kpipeliner         # `kpl` ends up on your PATH (needs uv: https://docs.astral.sh/uv/)
 kpl --help
 ```
 
-To uninstall: `./install.sh --uninstall` (or `kpl uninstall`).
+You can also install it into an environment of your own: `uv pip install kpipeliner` or
+`pip install kpipeliner`. Nodes that declare no environment of their own run with the Python
+that `kpl` itself runs in — the environment you installed it into.
+
+Two optional extras (nothing is imported unless you use the feature): `kpipeliner[mcp]` for
+`kpl mcp` / `kpl gui --mcp`, and `kpipeliner[kwui]` for `kpl run --kwui`; `kpipeliner[all]` gives both.
+
+The installation-wide settings are in `config.yaml` (see the [Reference](#6-reference)). A default
+ships inside the package; the first run copies it to `~/.config/kpipeliner/config.yaml` (or
+`$KPL_HOME/config.yaml`) so your changes survive upgrades — `kpl config` prints where it is.
+
+To uninstall: `uv tool uninstall kpipeliner` (or `pip uninstall kpipeliner`).
+
+*Working on kpipeliner itself?* Clone the repository and run `uv pip install -e .` for an editable install.
+The old `./install.sh` still works for that checkout, but is no longer needed.
 
 ### Core concepts
 
@@ -750,10 +744,11 @@ nodes: [...]            # managed by kpl add / the GUI
 ### `config.yaml` (pipeliner installation, applies to all pipelines)
 
 ```yaml
-default_base_nodes_dir: /path/to/base_nodes   # default dir for installed node types
+default_base_nodes_dir: base_nodes     # default dir for installed node types (relative to this
+                                        # file's folder, or absolute)
 group_base_nodes: group_base_nodes      # where exported group components live
-python_env: null    # venv path kpl + no-env nodes run in, or null for the default
-                     # python environment; set by install.sh (--venv [path])
+lazy_input_resolution: true
+kwui: {host: 0.0.0.0, port: 8701, open_browser: true}
 gui:
   background:
     pattern: dots    # dots | lines | cross | none
@@ -780,10 +775,10 @@ kpipeliner can expose an [MCP](https://modelcontextprotocol.io) (Model Context P
 
 ### Installing it
 
-MCP support is optional and not installed by default — `install.sh`/`requirements.txt` deliberately leave out the `mcp` package, since most installations (anyone just building/running pipelines, without an LLM client involved) never need it:
+MCP support is optional and not installed by default — the base package deliberately leaves out the `mcp` package, since most installations (anyone just building/running pipelines, without an LLM client involved) never need it. Add it with the extra:
 
 ```bash
-pip install -r requirements-mcp.txt   # in the kpipeliner install directory
+uv tool install "kpipeliner[mcp]"       # or: uv pip install "kpipeliner[mcp]" / pip install "kpipeliner[mcp]"
 ```
 
 Without it, `kpl mcp` prints an install hint and exits; `kpl gui --mcp` prints the same hint and falls back to a plain `kpl gui` (the GUI still launches, just without the MCP endpoint).

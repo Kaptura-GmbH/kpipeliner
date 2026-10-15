@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,25 +8,50 @@ dynamic = ["version"]
 description = "kpipeliner (kpl) is a node-based pipeline manager."
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["pipeline", "workflow", "nodes", "automation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+# Everything needed to build and run pipelines, run the web GUI (`kpl gui`) and stop
+# nodes reliably. The prebuilt GUI frontend ships inside the package — no Node.js needed.
 dependencies = [
     "pyyaml>=6.0",
     "tqdm>=4.65",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "websockets>=12.0",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
-monitoring = ["psutil>=5.9"]
+# `kpl mcp` / `kpl gui --mcp`: let an LLM client design/inspect/run a pipeline.
+# Nothing imports mcp unless one of those is used, so leaving this out is fine.
+mcp = ["mcp>=2.0.0"]
+# `kpl run --kwui`: serve each node's own web UI as a step-by-step workflow. kwebui
+# itself needs Python >= 3.12, so on 3.10/3.11 this extra installs nothing and
+# `kpl run --kwui` says so.
+kwui = ["kwebui; python_version >= '3.12'"]
+all = ["kpipeliner[mcp,kwui]"]
+
+[project.urls]
+Repository = "https://github.com/Kaptura-GmbH/kpipeliner"
 
 [project.scripts]
-kpl = "kpipeline.cli:main"
+kpl = "kpipeline.kpipeline:main"
 
+# The version is never written by hand: it comes from the latest git tag (1.12.0 on the tag,
+# 1.12.1.devN+g<hash> for N commits after it), so a build always reflects the current project.
 [tool.hatch.version]
-path = "kpipeline/__init__.py"
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["kpipeline", "kpipeline_gui"]
+
+# The source distribution holds only what is needed to rebuild the wheel — not the
+# checkout's own config.yaml (machine-specific), its launcher or installer, or docs.
+[tool.hatch.build.targets.sdist]
+include = ["/kpipeline", "/kpipeline_gui", "/README.md", "/pyproject.toml"]
 
 [tool.hatch.build]
 exclude = [

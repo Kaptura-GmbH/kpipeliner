@@ -49,7 +49,10 @@ from kpipeline import KGraph  # noqa: E402
 from kpipeline.src.kbase_nodes import (  # noqa: E402
     get_group_base_nodes_dir, resolve_base_nodes_dirs, scan_base_nodes,
 )
-from kpipeline.src.kpaths import read_configured_dirs  # noqa: E402
+from kpipeline.src.kpaths import (  # noqa: E402
+    config_dir, config_path, ensure_user_config, kpl_command, kpl_env, mcp_install_hint,
+    read_configured_dirs,
+)
 
 # ---------------------------------------------------------------------------
 # App
@@ -330,7 +333,7 @@ _DEFAULT_GUI_CONFIG = {
 
 
 def _gui_config_path() -> str:
-    return os.path.join(PIPELINER_DIR, 'config.yaml')
+    return config_path()
 
 
 def _load_gui_config() -> dict:
@@ -369,6 +372,7 @@ async def save_config(request_data: dict):
         if section in _DEFAULT_GUI_CONFIG and isinstance(values, dict):
             gui[section] = {**(gui.get(section) or {}), **values}
     cfg['gui'] = gui
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
     return JSONResponse({'ok': True, **_load_gui_config()})
@@ -378,7 +382,7 @@ def _list_group_components() -> list[dict]:
     """Exported group components from the group_base_nodes dir, shaped like
     node-type entries so the components panel can list and drag them. They
     are listed after the base nodes, under 'groups/<category>'."""
-    gdir = get_group_base_nodes_dir(PIPELINER_DIR)
+    gdir = get_group_base_nodes_dir(config_dir())
     comps = []
     if not os.path.isdir(gdir):
         return comps
@@ -442,7 +446,7 @@ def get_graph():
     edges = []
     missing = []
     installed = scan_base_nodes(resolve_base_nodes_dirs(
-        PIPELINER_DIR,
+        config_dir(),
         load_default=bool(cfg.get('load_default_base_nodes_dir', True)),
         custom_dirs=cfg.get('custom_base_nodes_dirs') or [],
         pipeline_dir=_workdir,
@@ -1155,7 +1159,7 @@ async def export_group(request_data: dict):
         'jump_links': tpl_jump_links,
     }
 
-    gdir = get_group_base_nodes_dir(PIPELINER_DIR)
+    gdir = get_group_base_nodes_dir(config_dir())
     target_dir = os.path.join(gdir, category) if category else gdir
     path = os.path.join(target_dir, f'{name}.yaml')
     if os.path.exists(path) and not overwrite:
@@ -1171,7 +1175,7 @@ async def export_group(request_data: dict):
 @app.get('/api/group-component')
 def get_group_component(category: str = '', name: str = ''):
     """Return a group component template (for expansion on drop)."""
-    gdir = get_group_base_nodes_dir(PIPELINER_DIR)
+    gdir = get_group_base_nodes_dir(config_dir())
     safe_cat = os.path.basename(category) if category else ''
     safe_name = os.path.basename(name)
     parts = [gdir, safe_cat, f'{safe_name}.yaml'] if safe_cat else [gdir, f'{safe_name}.yaml']
@@ -1186,12 +1190,7 @@ def get_group_component(category: str = '', name: str = ''):
 
 
 def _kpl_cmd() -> list[str]:
-    launcher = os.path.join(PIPELINER_DIR, 'kpl')
-    if not os.path.exists(launcher):
-        launcher = os.path.join(PIPELINER_DIR, 'kpipeliner')  # legacy name
-    if os.path.exists(launcher):
-        return [launcher]
-    return [sys.executable, os.path.join(PIPELINER_DIR, 'kpipeline.py')]
+    return kpl_command()
 
 
 @app.post('/api/run-group')
@@ -1216,13 +1215,7 @@ async def run_pipeline(request_data: dict):
     debug = request_data.get('debug', False)
     clear_cache = request_data.get('clear_cache', False)
 
-    launcher = os.path.join(PIPELINER_DIR, 'kpl')
-    if not os.path.exists(launcher):
-        launcher = os.path.join(PIPELINER_DIR, 'kpipeliner')  # legacy name
-    if os.path.exists(launcher):
-        kpipeliner_cmd = [launcher]
-    else:
-        kpipeliner_cmd = [sys.executable, os.path.join(PIPELINER_DIR, 'kpipeline.py')]
+    kpipeliner_cmd = kpl_command()
 
     sub = 'run_debug' if debug else 'run'
 
@@ -1564,15 +1557,14 @@ def main():
     args = _parse_args()
     _workdir = os.path.abspath(args.workdir)
     os.chdir(_workdir)
+    ensure_user_config()
 
     if args.mcp:
         try:
             from kpipeline_gui.mcp_app import mount as mount_mcp
         except ImportError:
             print("MCP support needs the optional 'mcp' package (not installed) — "
-                  "continuing without it. Install with: "
-                  f"{sys.executable} -m pip install -r "
-                  f"{os.path.join(PIPELINER_DIR, 'requirements-mcp.txt')}")
+                  "continuing without it. " + mcp_install_hint())
         else:
             mount_mcp(app, _workdir)
             print(f'MCP endpoint mounted at /mcp (workdir: {_workdir})')

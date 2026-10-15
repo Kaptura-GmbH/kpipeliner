@@ -26,9 +26,9 @@ sys.path.insert(0, PIPELINER_DIR)
 try:
     from kpipeline_gui.mcp_app import build_server  # noqa: E402
 except ImportError:
+    from kpipeline.src.kpaths import mcp_install_hint
     print("MCP support needs the optional 'mcp' package (not installed).")
-    print(f'Install it with: {sys.executable} -m pip install -r '
-          f"{os.path.join(PIPELINER_DIR, 'requirements-mcp.txt')}")
+    print(mcp_install_hint())
     sys.exit(1)
 
 

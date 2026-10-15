@@ -2,6 +2,8 @@
 *.pyc
 .claude/
 __pycache__/
+/dist/
+*.egg-info/
 graphify-out/
 milestones.md
 decisions.md

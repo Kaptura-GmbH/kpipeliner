@@ -32,77 +32,24 @@ import threading
 import time
 import uuid as _uuid_mod
 
-PIPELINER_DIR = os.path.dirname(os.path.abspath(__file__))
+if __name__ == '__main__' and not __package__:
+    # `python kpipeline/kpipeline.py` puts this folder first on sys.path, so
+    # `import kpipeline` below would find THIS FILE instead of the package.
+    sys.exit('Do not run this file by its path. Use the `kpl` command, or: '
+             'python -m kpipeline.kpipeline')
 
+import yaml
 
-def _configured_venv_dir():
-    """The venv dir configured in config.yaml's `python_env` (set by
-    install.sh --venv), or None to use the default python environment
-    (whatever python invoked kpl). Parsed by hand instead of with `yaml`:
-    this runs before we know the CURRENT interpreter even has yaml installed
-    — that's exactly the case re-execing into the configured venv fixes."""
-    cfg_path = os.path.join(PIPELINER_DIR, 'config.yaml')
-    if not os.path.exists(cfg_path):
-        return None
-    try:
-        with open(cfg_path) as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped.startswith('python_env:'):
-                    continue
-                val = stripped.split(':', 1)[1].strip().strip('"\'')
-                if val in ('', 'null', '~', 'None'):
-                    return None
-                return val
-    except Exception:
-        pass
-    return None
-
-
-def _ensure_venv_python():
-    """Re-exec under the configured python_env when one is set and we're not
-    already running there, so the CLI, GUI and fallback node runs are always
-    consistent with it. No python_env configured -> keep whatever python
-    invoked kpl (the default python environment)."""
-    venv_dir = _configured_venv_dir()
-    if not venv_dir:
-        return  # no configured env — use the default python environment
-    venv_python = os.path.join(venv_dir, 'bin', 'python')
-    if not os.path.exists(venv_python):
-        return  # configured env missing/broken — fall back to current python
-    if os.path.realpath(sys.prefix) == os.path.realpath(venv_dir):
-        return  # already running inside it
-    if os.environ.get('_KPL_REEXEC') == '1':
-        return  # safety: never re-exec twice
-    os.environ['_KPL_REEXEC'] = '1'
-    os.execv(venv_python, [venv_python, os.path.abspath(__file__)] + sys.argv[1:])
-
-
-# Must run before any third-party import (yaml, …): with a non-venv python
-# those imports could fail before we get the chance to switch interpreter.
-_ensure_venv_python()
-
-import yaml  # noqa: E402
-
-MAX_NODES = 500
-
-# ---------------------------------------------------------------------------
-# Path helpers
-# ---------------------------------------------------------------------------
-
-
-def _add_pipeliner_to_path():
-    if PIPELINER_DIR not in sys.path:
-        sys.path.insert(0, PIPELINER_DIR)
-
-
-_add_pipeliner_to_path()
-
-from kpipeline import KNode, KGraph, KParameter, NodeState, PipelineExecutor  # noqa: E402
-from kpipeline.src.kbase_nodes import (  # noqa: E402
+from kpipeline import KNode, KGraph, KParameter, NodeState, PipelineExecutor
+from kpipeline.src.kbase_nodes import (
     get_default_base_nodes_dir, scan_base_nodes, find_node_dir,
 )
-from kpipeline.src.kpaths import read_configured_dirs  # noqa: E402
+from kpipeline.src.kpaths import (
+    PIPELINER_DIR, config_dir, config_path, ensure_user_config, is_checkout,
+    mcp_available, mcp_install_hint, packaged_config_path, read_configured_dirs,
+)
+
+MAX_NODES = 500
 
 
 def _pid_alive(pid):
@@ -279,7 +226,7 @@ class Pipeliner:
         # Verify type exists in the pipeline's effective base-nodes dirs
         # (custom_base_nodes_dirs first, then the default when enabled).
         dirs = graph.get_base_nodes_dirs()
-        node_dir = find_node_dir(node_type, PIPELINER_DIR, dirs=dirs)
+        node_dir = find_node_dir(node_type, config_dir(), dirs=dirs)
         if not node_dir:
             print(f"Node type '{node_type}' not found in base nodes "
                   f"({', '.join(dirs) or 'no base-nodes dirs configured'}).")
@@ -403,6 +350,12 @@ class Pipeliner:
         host/port/open_browser: None -> config.yaml's `kwui:` section defaults.
         """
         if not _require_config():
+            return False
+        if importlib.util.find_spec('kwebui') is None:
+            print("kwui mode needs the optional 'kwebui' package (it requires Python >= 3.12), "
+                  "which is not installed.")
+            print('Install it with: uv pip install "kpipeliner[kwui]"   '
+                  f'(or: {sys.executable} -m pip install "kpipeliner[kwui]")')
             return False
         from kpipeline.src.kwui import (WORKFLOW_FILE, run_with_ui, tracker_steps,
                                         workflow_path)
@@ -1088,7 +1041,7 @@ class Pipeliner:
             types = list({n.type for n in graph.nodes})
 
         for nt in types:
-            nt_dir = find_node_dir(nt, PIPELINER_DIR, dirs=dirs)
+            nt_dir = find_node_dir(nt, config_dir(), dirs=dirs)
             if not nt_dir:
                 print(f"  Type '{nt}' not found.")
                 continue
@@ -1128,11 +1081,11 @@ def create_base_node():
 def install_base_node(node_name=None):
     # base_node install/uninstall manage the installation's DEFAULT dir only;
     # pipeline-specific custom_base_nodes_dirs are managed by hand.
-    nodes_dir = get_default_base_nodes_dir(PIPELINER_DIR)
+    nodes_dir = get_default_base_nodes_dir(config_dir())
     os.makedirs(nodes_dir, exist_ok=True)
     current_dir = os.getcwd()
     name = node_name or os.path.basename(current_dir)
-    existing = find_node_dir(name, PIPELINER_DIR)
+    existing = find_node_dir(name, config_dir())
     dest = existing or os.path.join(nodes_dir, name)
 
     if os.path.exists(dest):
@@ -1149,7 +1102,7 @@ def install_base_node(node_name=None):
 
 
 def uninstall_base_node(node_name):
-    dest = find_node_dir(node_name, PIPELINER_DIR)
+    dest = find_node_dir(node_name, config_dir())
     if not dest:
         print(f"Node '{node_name}' not found.")
         return False
@@ -1179,7 +1132,7 @@ def _kwui_server_defaults():
     per run by --kwui-host / --kwui-port / --kwui-no-browser."""
     from kpipeline.src.kwui import DEFAULT_HOST, DEFAULT_PORT
     defaults = {'host': DEFAULT_HOST, 'port': DEFAULT_PORT, 'open_browser': True}
-    cfg_path = os.path.join(PIPELINER_DIR, 'config.yaml')
+    cfg_path = config_path()
     if not os.path.exists(cfg_path):
         return defaults
     try:
@@ -1201,7 +1154,7 @@ def _lazy_input_resolution_enabled():
     the cached value itself on first access) or eagerly (parent reads it up
     front and bakes it into the subprocess's CLI args) — config.yaml's
     `lazy_input_resolution` key, defaulting to True (lazy)."""
-    cfg_path = os.path.join(PIPELINER_DIR, 'config.yaml')
+    cfg_path = config_path()
     if not os.path.exists(cfg_path):
         return True
     try:
@@ -1216,14 +1169,25 @@ def _lazy_input_resolution_enabled():
 
 def _mcp_package_available():
     """Whether the optional `mcp` package (kpl mcp / kpl gui --mcp only —
-    not needed to build or run pipelines) is installed in this interpreter."""
-    return importlib.util.find_spec('mcp') is not None
+    not needed to build or run pipelines) is installed in this interpreter, in a
+    version this project can use."""
+    return mcp_available()
 
 
 def _print_mcp_missing():
     print("MCP support needs the optional 'mcp' package (not installed).")
-    print(f'Install it with: {sys.executable} -m pip install -r '
-          f"{os.path.join(PIPELINER_DIR, 'requirements-mcp.txt')}")
+    print(mcp_install_hint())
+
+
+def _ensure_kpl_on_path():
+    """Nodes — and the nested `kpl` runs of GroupRef/NodeRef — start `kpl` by NAME. For
+    a pip/uv-installed kpl that only works if its environment is activated, so put the
+    directory of THIS environment's `kpl` script on PATH. A no-op in a source checkout,
+    which has no such script (its `kpl` launcher is on PATH via install.sh)."""
+    bin_dir = os.path.dirname(sys.executable)
+    script = os.path.join(bin_dir, 'kpl')
+    if os.path.exists(script) and shutil.which('kpl') != script:
+        os.environ['PATH'] = bin_dir + os.pathsep + os.environ.get('PATH', '')
 
 
 def _warn_missing(graph):
@@ -1397,7 +1361,20 @@ def _kwui_server_args(args):
     }
 
 
+def show_config():
+    """`kpl config`: where the installation-wide config.yaml is (created from the
+    packaged default on first use), and where the node libraries it points to are."""
+    path = ensure_user_config() or config_path()
+    print(f'Config file:           {path}' + ('' if os.path.exists(path) else '   (not created yet: built-in defaults apply)'))
+    print(f'Packaged default:      {packaged_config_path()}')
+    print(f'Base nodes directory:  {get_default_base_nodes_dir(config_dir())}')
+    print('\nEdit the config file to change settings (a pipeline can still override the\n'
+          'node libraries in its own graph_config.yaml). Set KPL_HOME to keep it elsewhere.')
+
+
 def main():
+    _ensure_kpl_on_path()
+    ensure_user_config()
     parser = argparse.ArgumentParser(
         prog='kpl',
         description='kpl (kpipeliner) – node-based pipeline manager',
@@ -1505,6 +1482,9 @@ def main():
     p_env_install.add_argument('--category', default=None,
                                 help='Install every node type in this category (as shown by `kpl list`)')
 
+    # installation-wide configuration
+    sub.add_parser('config', help='Show where the installation config.yaml is (and create it)')
+
     # uninstall kpipeliner itself
     sub.add_parser('uninstall', help='Uninstall kpl from PATH')
 
@@ -1521,7 +1501,8 @@ def main():
         p.run_gui(mcp=getattr(args, 'mcp', False))
 
     elif args.command == 'mcp':
-        p.run_mcp()
+        if p.run_mcp() is False:
+            sys.exit(1)  # could not start (e.g. the optional mcp package is missing)
 
     elif args.command == 'list':
         p.list_nodes()
@@ -1608,6 +1589,9 @@ def main():
         if args.env_command == 'install':
             p.install_node_env(node_type=args.node_type, category=args.category)
 
+    elif args.command == 'config':
+        show_config()
+
     elif args.command == 'uninstall':
         _run_uninstall()
 
@@ -1616,6 +1600,11 @@ def main():
 
 
 def _run_uninstall():
+    if not is_checkout():
+        print('kpipeliner was installed as a Python package; remove it with:\n'
+              '  uv tool uninstall kpipeliner      (if installed with `uv tool install`)\n'
+              '  uv pip uninstall kpipeliner       (or: pip uninstall kpipeliner)')
+        return
     uninstall_sh = os.path.join(PIPELINER_DIR, 'install.sh')
     if not os.path.exists(uninstall_sh):
         print('install.sh not found.')

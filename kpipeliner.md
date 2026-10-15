@@ -553,10 +553,10 @@ cat cache/$(python3 -c "import yaml;print(yaml.safe_load(open('extern/uuid.yaml'
 
 ## 6. MCP interface (optional — faster than the CLI for an agent)
 
-This needs the separate, optional `mcp` Python package — kpipeliner's own
-requirements.txt deliberately excludes it (most installations never need it).
+This needs the separate, optional `mcp` Python package (kpipeliner's `mcp` extra) — the
+base install deliberately excludes it (most installations never need it).
 If `kpl mcp`/`kpl gui --mcp` print a message about it being missing, install
-with `pip install -r requirements-mcp.txt` (in the kpipeliner install dir) —
+with `uv pip install "kpipeliner[mcp]"` (or `pip install "kpipeliner[mcp]"`) —
 or just use the CLI workflow in §2/§3 instead, nothing here requires MCP.
 
 If this pipeline's kpipeliner installation is running with `kpl mcp` (headless,

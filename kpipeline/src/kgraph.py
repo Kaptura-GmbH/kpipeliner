@@ -51,8 +51,10 @@ class KGraph:
         self.load_externals()
 
     def _find_pipeliner_dir(self):
-        # kgraph.py lives at <root>/kpipeline/src/kgraph.py  →  go up 3 levels
-        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # The directory of the installation-wide config.yaml (see kpaths.config_dir):
+        # the repo root in a checkout, ~/.config/kpipeliner for an installed package.
+        from kpipeline.src.kpaths import config_dir
+        return config_dir()
 
     def get_base_nodes_dirs(self):
         """Effective ordered base-nodes dirs for this pipeline: the custom

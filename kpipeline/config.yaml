@@ -1,0 +1,49 @@
+# kpipeliner installation-wide configuration.
+#
+# This is the packaged DEFAULT. The first time kpl runs, it copies this file to your
+# own config directory so your edits survive upgrades of the package:
+#     $KPL_HOME/config.yaml   if the KPL_HOME environment variable is set, else
+#     ~/.config/kpipeliner/config.yaml
+# Run `kpl config` to see the exact path. Relative paths below are relative to that
+# directory; absolute paths and ~ are fine too. Delete a key to get its default back.
+
+# Directory containing the base node types (the node library your pipelines use).
+# Nodes are grouped in category subdirectories; a category starting with '_' is
+# ignored; nodes directly in the root get the category 'no category'. A pipeline can
+# opt out of / extend this via load_default_base_nodes_dir and custom_base_nodes_dirs
+# in its graph_config.yaml. (Legacy key name: base_nodes)
+default_base_nodes_dir: base_nodes
+
+# Directory for groups exported from the GUI as reusable components. Components are
+# stored as <group_base_nodes>/<category>/<name>.yaml and appear in the components
+# panel under 'groups/<category>'.
+group_base_nodes: group_base_nodes
+
+# Whether a `nodes.X.Y` input reference is resolved lazily (the node's own process
+# reads the cached value the first time its code touches self.inputs[name].value) or
+# eagerly (kpl reads it up front and passes it on the command line). Note: either way
+# the producing node is run first — lazy only postpones READING its result.
+lazy_input_resolution: true
+
+# Where `kpl run --kwui` / `kpl run_debug --kwui` serve workflow.py (needs the optional
+# `kwui` extra: pip install "kpipeliner[kwui]").
+# host: 0.0.0.0 listens on all interfaces, so the page is reachable from other machines
+#   on the network (kwebui has no authentication — use 127.0.0.1 to keep it on this
+#   machine).
+# port: starting port; the first free one at or above it is used.
+# open_browser: open a browser on this machine as soon as the server is up.
+# Per-run overrides: --kwui-host / --kwui-port / --kwui-no-browser.
+kwui:
+  host: 0.0.0.0
+  port: 8701
+  open_browser: true
+
+# Appearance of the web GUI (`kpl gui`); the GUI itself also edits these.
+gui:
+  background:
+    pattern: dots  # dots, lines, cross, none
+    gap: 10
+    size: 1
+    color: '#2d3748'
+  snap:
+    enabled: true

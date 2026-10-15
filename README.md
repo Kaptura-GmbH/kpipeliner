@@ -23,23 +23,33 @@ over to an LLM through MCP.
 
 ## Install
 
+kpipeliner is a normal Python package — installing it is the whole installation
+(dependencies, the prebuilt web GUI and the `kpl` command; no Node.js, no installer
+script). With [uv](https://docs.astral.sh/uv/):
+
 ```bash
-git clone git@gitlab.com:KapturaGmbH/project44/kaptura-pipeliner.git
-cd kaptura-pipeliner
-./install.sh                      # uses your default python environment
-# or: ./install.sh --venv         # creates/uses a venv at ./.venv instead
-source ~/.bashrc                  # or restart your terminal
+uv tool install kpipeliner          # `kpl` ends up on your PATH
 kpl --help
 ```
 
-The installer sets up the Python environment, installs dependencies, builds
-the GUI frontend (needs Node.js/npm — the CLI still works without it), and
-adds `kpl` to your `PATH`. MCP support is a separate, optional install (see
-the table below):
+or into an environment of your own: `uv pip install kpipeliner` (or `pip install kpipeliner`).
+
+Optional extras — nothing imports them unless you use the feature, so leaving them out is fine:
 
 ```bash
-pip install -r requirements-mcp.txt
+uv tool install "kpipeliner[mcp]"    # `kpl mcp` / `kpl gui --mcp` (LLM client access)
+uv tool install "kpipeliner[kwui]"   # `kpl run --kwui` (a web UI per node)
+uv tool install "kpipeliner[all]"    # both
 ```
+
+Configuration lives in a `config.yaml` that ships with the package; the first run copies it
+to `~/.config/kpipeliner/config.yaml` (or `$KPL_HOME/config.yaml`) so your edits survive
+upgrades. `kpl config` prints its location.
+
+**Developing kpipeliner itself:** clone the repository and run `uv pip install -e .` (or
+`uv sync --all-extras`) — an editable install; the checkout's own `config.yaml` is used.
+To build the package: `uv build` (rebuild the GUI first with `npm run build` in
+`kpipeline_gui/frontend` if the frontend changed — the built `dist/` is what ships).
 
 ## Quick start
 

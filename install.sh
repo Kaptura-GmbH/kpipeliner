@@ -158,7 +158,9 @@ fi
 # 4. Create launcher script
 cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
-"$PYTHON" "$PIPELINER_DIR/kpipeline.py" "\$@"
+# The CLI lives inside the package (kpipeline/kpipeline.py) and is started as a MODULE:
+# running that file by path would shadow the package. PYTHONPATH makes this checkout importable.
+PYTHONPATH="$PIPELINER_DIR\${PYTHONPATH:+:\$PYTHONPATH}" exec "$PYTHON" -m kpipeline.kpipeline "\$@"
 EOF
 chmod +x "$LAUNCHER"
 echo "  Created launcher: $LAUNCHER"
