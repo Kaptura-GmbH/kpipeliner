@@ -1286,7 +1286,7 @@ async def run_pipeline(request_data: dict):
 # kwui node-UI designer (kwebui edit mode) — started on demand from the context menu
 # ---------------------------------------------------------------------------
 
-#: node type -> {'proc': Popen, 'port': int, 'tail': [last output lines]}
+#: (node type, node id or '', show_code) -> {'proc': Popen, 'port': int, 'tail': [last output lines]}
 _design_servers: dict = {}
 _design_lock = threading.Lock()
 _DESIGN_FIRST_PORT = 8801   # clear of the GUI's 8601+ and a kwui run's 8701+
@@ -1319,11 +1319,21 @@ def _stop_design_servers():
 atexit.register(_stop_design_servers)
 
 
-def _start_design_server(node_type: str) -> dict:
-    """`kpl kwui design <node_type>` as a background process (one per node type, reused
-    while it runs). Returns {'ok', 'port'} or {'ok': False, 'error'}."""
+@app.on_event('shutdown')
+async def _stop_design_servers_on_shutdown():
+    # atexit alone is not enough: on Ctrl+C / SIGTERM uvicorn re-raises the signal after its
+    # graceful stop, so the interpreter ends without running atexit — the designers (and the
+    # node each one may be running) would outlive the GUI server.
+    _stop_design_servers()
+
+
+def _start_design_server(node_type: str, node_id: str = '', show_code: bool = False) -> dict:
+    """`kpl kwui design <node_type>` as a background process (one per node type — or per
+    node instance for show_code, which also RUNS that node behind the editor — reused while
+    it runs). Returns {'ok', 'port'} or {'ok': False, 'error'}."""
+    key = (node_type, node_id if show_code else '', bool(show_code))
     with _design_lock:
-        entry = _design_servers.get(node_type)
+        entry = _design_servers.get(key)
         if entry and entry['proc'].poll() is None and _port_open(entry['port']):
             return {'ok': True, 'port': entry['port'], 'reused': True}
         port = _find_free_port(_bind_host, _DESIGN_FIRST_PORT)
@@ -1331,6 +1341,8 @@ def _start_design_server(node_type: str) -> dict:
             return {'ok': False, 'error': 'No free port for the designer.'}
         cmd = kpl_command() + ['kwui', 'design', node_type, '--no-browser',
                                '--host', _bind_host, '--port', str(port)]
+        if show_code:
+            cmd += ['--show-code', '--node', node_id]
         proc = subprocess.Popen(cmd, cwd=_workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, env=dict(os.environ, PYTHONUNBUFFERED='1'))
         tail: list = []
@@ -1341,7 +1353,7 @@ def _start_design_server(node_type: str) -> dict:
                 del tail[:-20]
 
         threading.Thread(target=pump, daemon=True).start()
-        _design_servers[node_type] = {'proc': proc, 'port': port, 'tail': tail}
+        _design_servers[key] = {'proc': proc, 'port': port, 'tail': tail}
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if _port_open(port):
@@ -1363,12 +1375,14 @@ def kwui_design_available():
 @app.post('/api/kwui/design')
 async def kwui_design(request_data: dict):
     node_type = str(request_data.get('node_type') or '')
-    if not re.fullmatch(r'\w+', node_type):
-        return JSONResponse({'ok': False, 'error': 'Invalid node type.'}, status_code=400)
+    node_id = str(request_data.get('node_id') or '')
+    show_code = bool(request_data.get('show_code'))
+    if not re.fullmatch(r'\w+', node_type) or (show_code and not re.fullmatch(r'\w+', node_id)):
+        return JSONResponse({'ok': False, 'error': 'Invalid node type or node name.'}, status_code=400)
     if not _kwui_design_available():
         return JSONResponse({'ok': False, 'error': 'The designer needs kwebui >= 1.0.0: '
                                                    'uv pip install -U "kpipeliner[kwui]"'}, status_code=400)
-    result = await asyncio.to_thread(_start_design_server, node_type)
+    result = await asyncio.to_thread(_start_design_server, node_type, node_id, show_code)
     return JSONResponse(result, status_code=200 if result.get('ok') else 500)
 
 

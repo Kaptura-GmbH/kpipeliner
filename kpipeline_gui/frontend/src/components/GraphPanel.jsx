@@ -24,7 +24,7 @@ const EMPTY_HANDLE_COLORS = {}
 const EMPTY_HANDLE_SET = new Set()
 
 // ── Context menu ───────────────────────────────────────────────────────────
-function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntypes, onClose, onEditUI, onAddNode, onDeleteNode, onRunNode, onAddGroup, onDuplicateNode, onRemoveFromGroup, onToggleIOFlag }) {
+function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntypes, onClose, onEditUI, onEditUIWithCode, onAddNode, onDeleteNode, onRunNode, onAddGroup, onDuplicateNode, onRemoveFromGroup, onToggleIOFlag }) {
   const [expandedCat, setExpandedCat] = useState(null)
   const cats = {}
   ntypes.forEach(nt => {
@@ -43,6 +43,10 @@ function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntyp
             <div className="ctx-menu-item" onClick={() => { onDuplicateNode(nodeId); onClose() }}>⧉ Duplicate</div>
             {canEditUI && (
               <div className="ctx-menu-item" onClick={() => { onEditUI(nodeId); onClose() }}>✎ Edit UI</div>
+            )}
+            {canEditUI && (
+              <div className="ctx-menu-item" title="Also runs this node, so the UI its code draws is shown (dimmed, not editable)"
+                onClick={() => { onEditUIWithCode(nodeId); onClose() }}>✎ Edit UI + show coded UI (runs node)</div>
             )}
             {ioFlags && (
               <>
@@ -1021,9 +1025,12 @@ function GraphInner({
 
   // Opens the designer in a NEW tab. The tab is opened right away, inside the click — browsers
   // block a window opened after an async request — and pointed at the designer once it is up.
-  const editNodeUI = useCallback(nodeType => {
+  const editNodeUI = useCallback((nodeType, nodeId, showCode) => {
+    if (showCode && !window.confirm(
+      `This RUNS the node "${nodeId}" (its real code, hardware included) so the UI it draws in code can be shown next to the layout. `
+      + 'Other nodes are not run. Continue?')) return
     const tab = window.open('', '_blank')
-    axios.post('/api/kwui/design', { node_type: nodeType }).then(r => {
+    axios.post('/api/kwui/design', { node_type: nodeType, node_id: nodeId, show_code: !!showCode }).then(r => {
       const url = `${window.location.protocol}//${window.location.hostname}:${r.data.port}`
       if (tab) tab.location.href = url
       else window.open(url, '_blank')
@@ -1116,7 +1123,8 @@ function GraphInner({
         <ContextMenu
           x={ctxMenu.x} y={ctxMenu.y} nodeId={ctxMenu.nodeId} ioFlags={ctxMenu.ioFlags} frozen={ctxMenu.frozen ?? null} nodeTypes={ntypes}
           canEditUI={kwuiDesign && !!ctxMenu.isKwui}
-          onEditUI={nid => editNodeUI(ctxMenu.nodeType)}
+          onEditUI={nid => editNodeUI(ctxMenu.nodeType, nid, false)}
+          onEditUIWithCode={nid => editNodeUI(ctxMenu.nodeType, nid, true)}
           onToggleIOFlag={onToggleIOFlag}
           onClose={() => setCtxMenu(null)}
           onAddNode={type => onAddNodeAtPosition(type, ctxMenu.flowPos || { x: 200, y: 200 })}

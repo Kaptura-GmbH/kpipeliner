@@ -72,6 +72,10 @@ class Pipeliner:
 
     def __init__(self):
         self._executed_nodes = []
+        # UI-designer preview (`kpl kwui design --show-code`): run ONE node for its coded UI and
+        # never start anything else — inputs that reference other nodes are read from their
+        # cache or left out. False for every normal run, so those are unchanged.
+        self._no_dependency_runs = False
         # Nodes whose cached result must NOT be reused although it exists on disk:
         # set by invalidate_for_rerun() when a kwui workflow jumps back/forward or
         # is reset, so a dependent that is pulled in again recomputes from the new
@@ -340,11 +344,16 @@ class Pipeliner:
         return True
 
     def kwui_design(self, node_type=None, layout=None, host=None, port=None,
-                    open_browser=None):
+                    open_browser=None, node=None, show_code=False):
         """Open kwebui's visual editor (edit mode) on a node's UI layout file.
 
         The node shows the result with `self.ui.load_layout()`. The file is the node's
         `ui.layout.json` (next to node.py) unless `layout` names another one.
+        show_code: ALSO run the node `node` (an instance in this pipeline's graph_config.yaml)
+        behind the editor, so the UI its code draws is shown, dimmed and not editable —
+        only the layout is. That executes the real node code (hardware included) up to its
+        `interact()`; other nodes are never run (their cached outputs are used, else the
+        input stays unset).
         host/port/open_browser: None -> config.yaml's `kwui:` section defaults."""
         if importlib.util.find_spec('kwebui') is None:
             print("The designer needs the optional 'kwebui' package (it requires Python >= 3.12), "
@@ -358,6 +367,32 @@ class Pipeliner:
                   f'(or: {sys.executable} -m pip install -U "kpipeliner[kwui]")')
             return False
         from kpipeline.src.kwui import layout_path, run_design
+        preview = None
+        graph = None
+        if show_code:
+            if not node:
+                print('--show-code runs one node of this pipeline: name it with --node NAME.')
+                return False
+            if not os.path.exists(self.GRAPH_CONFIG):
+                print(f'No {self.GRAPH_CONFIG} here — --show-code must run inside the pipeline folder.')
+                return False
+            graph = KGraph(verbose=False)
+            graph.load_externals()
+            graph.load_from_yaml(self.GRAPH_CONFIG)
+            instance = graph.get_node(node)
+            if not instance:
+                print(f"Node '{node}' not found in this pipeline.")
+                return False
+            if node_type and instance.type != node_type:
+                print(f"Node '{node}' is of type '{instance.type}', not '{node_type}'.")
+                return False
+            node_type = instance.type
+
+            def preview(bridge):
+                bridge.set_sequence([node])
+                bridge.begin_step(node)
+                self._no_dependency_runs = True
+                self.run_node(node, graph=graph, use_cache=True, trigger_jump_forward=False)
         if layout:
             target = os.path.abspath(os.path.expanduser(layout))
             title = f'UI design: {os.path.basename(target)}'
@@ -381,7 +416,8 @@ class Pipeliner:
         run_design(target, title=title,
                    host=host or defaults['host'],
                    port=port or defaults['port'],
-                   open_browser=defaults['open_browser'] if open_browser is None else open_browser)
+                   open_browser=defaults['open_browser'] if open_browser is None else open_browser,
+                   preview=preview)
         return True
 
     def run_kwui(self, use_cache=False, debug=False, host=None, port=None,
@@ -553,7 +589,7 @@ class Pipeliner:
             if not recursive:
                 print(f'  Warning: jump-after {jump_src} but recursive=False.')
                 continue
-            if jump_src in self._skipped_steps:
+            if jump_src in self._skipped_steps or self._no_dependency_runs:
                 continue
             src_node = graph.get_node(jump_src)
             if (use_cache and jump_src not in self._force_rerun
@@ -615,6 +651,10 @@ class Pipeliner:
                             ) if ref_out_name in ref_node.outputs else None
                             if has_cache is not None and ref_node_id not in self._executed_nodes:
                                 self._executed_nodes.append(ref_node_id)
+                        if has_cache is None and self._no_dependency_runs:
+                            print(f"  [preview] input '{inp_name}': '{ref_node_id}' has no cached result "
+                                  f"and is not run for a preview — the input is left unset.")
+                            continue
                         if has_cache is None:
                             ok = self.run_node(
                                 ref_node_id, graph=graph,
@@ -1489,6 +1529,11 @@ def main():
     p_design.add_argument('--host', default=None, help="Bind address (default: config.yaml kwui.host)")
     p_design.add_argument('--port', type=int, default=None, help="First port to try (default: config.yaml kwui.port)")
     p_design.add_argument('--no-browser', action='store_true', help="Do not open a browser tab")
+    p_design.add_argument('--show-code', action='store_true',
+                          help="Also RUN the node (--node NAME) behind the editor so the UI its code "
+                               "draws is shown, dimmed and not editable. Runs the real node code.")
+    p_design.add_argument('--node', default=None, metavar='NAME',
+                          help="Node instance of this pipeline to run for --show-code")
 
     # tree
     sub.add_parser('tree', help='Print graph tree')
@@ -1599,7 +1644,8 @@ def main():
             p.kwui_init()
         elif args.kwui_command == 'design':
             p.kwui_design(args.node_type, layout=args.layout, host=args.host, port=args.port,
-                          open_browser=False if args.no_browser else None)
+                          open_browser=False if args.no_browser else None,
+                          node=args.node, show_code=args.show_code)
 
     elif args.command == 'tree':
         p.tree()

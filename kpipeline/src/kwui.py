@@ -865,6 +865,9 @@ class KwuiBridge:
         self._stopper = None
         self.sequence = []
         self.current_step = None
+        # Designer preview (run_design): the editor mounts the layout itself, so a node's
+        # load_layout() must not build a second, uneditable copy of it.
+        self.design = False
 
     # -- history ------------------------------------------------------------
 
@@ -1206,6 +1209,12 @@ class KwuiBridge:
                     pass
             time.sleep(0.2)
 
+    def stop_current(self):
+        """Stop the node process running right now (everything it started), if any."""
+        proc, token = self._proc, self._proc_token
+        if proc is not None:
+            self.stop_run(proc, token)
+
     def stop_leftovers(self, names):
         """Stop whatever earlier runs of nodes `names` left behind (a helper a finished
         step started and never ended, ...). Called when those nodes are about to run
@@ -1325,6 +1334,8 @@ class KwuiBridge:
         (through a temporary copy of the file with prefixed ids); the layout's page settings
         (width/theme) are dropped, since the workflow page owns those. Handlers named in
         the layout become relays to the node's own methods (see LAYOUT_CB_ID)."""
+        if self.design:
+            return   # the editor shows the layout itself (editable); see run_design
         if self._fresh:
             self._clear()
         path = message.get('path')
@@ -1686,22 +1697,49 @@ class _AnyHandler:
         return lambda *args, **kwargs: None
 
 
+class _NullTracker:
+    """Stands in for workflow.py's step tracker in the designer preview: takes every call."""
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
+
+
 def run_design(layout_file, *, title='Node UI design', host=DEFAULT_HOST, port=DEFAULT_PORT,
-               open_browser=True, log_level='warning'):
+               open_browser=True, log_level='warning', preview=None):
     """Serve kwebui's visual editor (edit mode) on a node's layout file and block until
     interrupted. The file is created on the first change if it does not exist yet; every
     change is written to it at once (no save step). The node shows the result with
     `self.ui.load_layout()`. A layout's page settings (width, theme) are only for
-    designing: at run time the workflow page owns them (see KwuiBridge._load_layout)."""
+    designing: at run time the workflow page owns them (see KwuiBridge._load_layout).
+
+    `preview(bridge)` (optional) runs the node itself behind this page, exactly as a kwui run
+    would, so the UI its CODE draws (`self.ui.text(...)`, ...) is shown too — in kwebui's
+    edit mode such widgets are dimmed and cannot be edited; only the layout can. It runs
+    the real node code (and blocks in `interact()` until the designer stops). The coded
+    widgets sit above the layout's, and `load_layout()` calls inside the node are skipped:
+    the editor already shows that layout, editable."""
     from kwebui import KApp
     from kwebui.editor import load_layout
 
     class Designer(KApp):
         def build(self):
+            if preview is not None:
+                self.code_ui = self.container(border=False)   # where the node's coded UI lands
             # Also records the path, which edit mode uses as "the file this app is made of".
             load_layout(self, layout_file, handlers=_AnyHandler())
 
     app = Designer(title=title, edit_mode=True)
+    bridge = None
+    if preview is not None:
+        bridge = KwuiBridge(_NullTracker(), app.code_ui, app)
+        bridge.design = True
+        set_active_bridge(bridge)
+        # The previewed node must end with the designer. kwebui's on_shutdown runs on every graceful
+        # stop (Ctrl+C, SIGTERM from the GUI server, exit()); code after app.run() would NOT run
+        # on SIGTERM, because uvicorn re-raises the signal and the process dies right there.
+        app.on_shutdown(bridge.stop_current)
 
     requested_port = port
     port = _find_free_port(host, requested_port)
@@ -1720,4 +1758,13 @@ def run_design(layout_file, *, title='Node UI design', host=DEFAULT_HOST, port=D
             print(f'On the network → http://{lan_ip}:{port}', flush=True)
     if open_browser:
         threading.Thread(target=_open_when_ready, args=(app, local_url), daemon=True).start()
-    app.run(host=host, port=port, log_level=log_level)
+    if bridge is not None:
+        def run_preview():
+            _wait_for_browser(app)
+            preview(bridge)
+        threading.Thread(target=run_preview, daemon=True).start()
+    try:
+        app.run(host=host, port=port, log_level=log_level)
+    finally:
+        if bridge is not None:
+            bridge.stop_current()   # the previewed node (and anything it started) ends with the designer

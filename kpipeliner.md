@@ -870,7 +870,11 @@ Instead of writing `self.ui.text(...)`, `self.ui.button(...)` ... in code, a nod
 ```bash
 kpl kwui design <node_type>                 # edits <node dir>/ui.layout.json
 kpl kwui design --layout path/to/x.json     # any other layout file (created on the first change)
+kpl kwui design --show-code --node <name>   # ALSO runs that node, to show the UI its code draws (see below)
 ```
+
+The layout file is `ui.layout.json` **in the node type's own folder**, beside `node.py` and `node_config.yaml` (the folder is
+found through the pipeline's base-node dirs, like `kpl add`); it is created on the first change.
 
 The editor opens in the browser (`--host/--port/--no-browser` like `--kwui-*`; defaults from
 `config.yaml`'s `kwui:` section). Right-click inside a container to insert a widget, click a widget
@@ -907,5 +911,15 @@ Rules:
 - Without a live UI (plain `kpl run`) `load_layout` — and every widget call — returns no-op handles
   (`update(...)`, `cols[0].text(...)` work and do nothing), so the same node.py works in both modes.
 - The designed page is for the node's own page; the workflow page (sidebar, tracker, buttons) stays `workflow.py`.
+
+**Showing the coded UI in the editor (`--show-code --node NAME`).** A page built with `self.ui.text(...)` etc. exists only
+while the node runs, so the editor cannot show it by itself. With `--show-code` the designer also **runs the node
+instance `NAME`** of the current pipeline behind the editor, exactly as a kwui run would, and the widgets its code draws
+appear **dimmed and not editable** (kwebui edit mode: only widgets that come from the layout file are editable). Rules:
+this executes the real node code (hardware included) up to its `interact()`; **no other node is run** — inputs that
+reference other nodes use their cached outputs, else stay unset (a message says so); `load_layout()` calls inside the node are skipped
+(the editor already shows that layout, editable, and the coded widgets are listed above it, not in their real order);
+the node ends when the designer stops. The GUI offers it as a second context-menu entry, **Edit UI + show coded UI (runs node)**,
+with a confirmation; plain **Edit UI** never runs anything.
 - kwebui 1.0 serves ONE browser tab at a time: opening the page in a second tab hands the session to that tab
   and the first shows "superseded" with a Reload button (this also applies to `kpl run --kwui` over the LAN).

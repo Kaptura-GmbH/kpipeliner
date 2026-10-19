@@ -1076,7 +1076,8 @@ kpl kwui design <node_type>        # opens the editor on <node folder>/ui.layout
 ```
 
 In the GUI, **right-click a `UI` node → Edit UI** does the same and opens the editor in a new tab
-(the entry only appears when kwebui with edit mode is installed).
+(the entry only appears when kwebui with edit mode is installed). The layout is saved as
+`ui.layout.json` in the node type's own folder, next to `node.py`.
 
 In the editor: right-click inside a container to insert a widget, click a widget to change its
 properties, drag to move or reorder, drag the gap between two columns to resize. Everything is saved
@@ -1095,6 +1096,13 @@ self.ui.interact()
 
 A callback named in the editor (say `on_save`) simply calls `self.on_save()` of your node. If the file is
 missing, a widget type is unknown or a named method does not exist, the node stops with a clear error.
+**Showing the UI your code draws.** Widgets created in code (`self.ui.text(...)`) only exist while the node runs,
+so a plain editor starts empty. Right-click the node → **Edit UI + show coded UI (runs node)** (or
+`kpl kwui design --show-code --node <name>`) runs that node behind the editor: its coded widgets appear next to
+the layout, dimmed and not editable — only the layout can be edited. **This executes the node's real code**
+(cameras, motors ... up to its `interact()`), which is why the GUI asks first; no other node is run (cached
+outputs are used for inputs). The node stops when you close the designer.
+
 Two nodes may use the same ids; they never mix up clicks. The page width and theme set in the editor
 only apply while designing — the workflow page decides them at run time. The same `node.py` still runs
 in a plain `kpl run` (the page calls are ignored there).

@@ -1,0 +1,9 @@
+{"kwebui_layout": 1, "page": {"theme": "dark", "width": 1500}, "widgets": [
+ {"type": "text", "id": "title", "props": {"text": "TITLE"}, "handlers": {}, "children": []},
+ {"type": "columns", "id": "cols", "props": {"n": [0.4, 0.6]}, "handlers": {}, "children": [
+   {"type": "column", "id": "left", "props": {"direction": "vertical", "border": true, "caption": "Left"}, "handlers": {}, "children": [
+      {"type": "button", "id": "save", "props": {"text": "Save"}, "handlers": {"on_click": "on_save"}, "children": []}]},
+   {"type": "column", "id": "right", "props": {"direction": "vertical"}, "handlers": {}, "children": [
+      {"type": "text", "id": "status", "props": {"text": "idle"}, "handlers": {}, "children": []}]}]},
+ {"type": "button", "id": "go", "props": {"text": "Go on"}, "handlers": {"on_click": "on_go"}, "children": []}
+]}
