@@ -514,8 +514,8 @@ mcp = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.111.0" },
-    { name = "kwebui", marker = "python_full_version >= '3.12' and extra == 'all'" },
-    { name = "kwebui", marker = "python_full_version >= '3.12' and extra == 'kwui'" },
+    { name = "kwebui", marker = "python_full_version >= '3.12' and extra == 'all'", specifier = ">=1.0.0" },
+    { name = "kwebui", marker = "python_full_version >= '3.12' and extra == 'kwui'", specifier = ">=1.0.0" },
     { name = "mcp", marker = "extra == 'all'", specifier = ">=2.0.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0.0" },
     { name = "psutil", specifier = ">=5.9" },
@@ -528,7 +528,7 @@ provides-extras = ["all", "kwui", "mcp"]
 
 [[package]]
 name = "kwebui"
-version = "0.12.0"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -536,9 +536,9 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets", version = "17.2", source = { registry = "https://pypi.org/simple" } },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/b6/f29aaae1d4afa0dc587391e8907b189ec4abc0a089ed74bf7542e180a388/kwebui-0.12.0.tar.gz", hash = "sha256:c8256ae17743474fbdee46bc95bb7ad33ebf53a2edba9118a2981f7a599b4b4b", size = 683970, upload-time = "2026-09-16T08:41:24.073Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/3d/3959b0abd31b25dce094b4bacfb49efb215e307bffd750a76c51e98e6fce/kwebui-1.0.0.tar.gz", hash = "sha256:cbaddb4ee5c02ce33ee24eb0b6d471cb813c8e6efffff24129001db9002a6387", size = 827802, upload-time = "2026-10-19T10:11:55.429Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/9e/6c6e4f29179804b1c9040d223774df459ca39800cc26172cdb4027408ea6/kwebui-0.12.0-py3-none-any.whl", hash = "sha256:16c3d11d71b244e607b637ada9ab9796a0c9178ae9c05eaf8a14e2aca96d361c", size = 238156, upload-time = "2026-09-16T08:41:22.488Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/a6/bf880d94a9da56978d9de319d858751a3cbba1872ff69011cfc6472d60f4/kwebui-1.0.0-py3-none-any.whl", hash = "sha256:777cba3cb9d84e4cf38465473cad24e6eeeef892550f60cb214d3cd4cc8cd95d", size = 273492, upload-time = "2026-10-19T10:11:52.936Z" },
 ]
 
 [[package]]

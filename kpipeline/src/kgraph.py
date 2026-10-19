@@ -30,6 +30,10 @@ class KGraph:
         # Per-pipeline base-node sources (graph_config.yaml):
         self.load_default_base_nodes_dir = True
         self.custom_base_nodes_dirs = []
+        # Where this pipeline's exported groups are saved (graph_config.yaml `groups_dir`:
+        # relative to the pipeline dir, or absolute). None = key not set (the GUI then
+        # falls back to the installation's group_base_nodes dir); only written when set.
+        self.groups_dir = None
         # Where this pipeline's cache/ and data/ live (graph_config.yaml
         # `cache_dir` / `data_dir`). Relative to the pipeline dir unless
         # absolute (starts with '/'). Defaults match the historical
@@ -133,6 +137,7 @@ class KGraph:
         self.available_nodes = cfg.get('available_nodes', []) or []
         self.load_default_base_nodes_dir = bool(cfg.get('load_default_base_nodes_dir', True))
         self.custom_base_nodes_dirs = cfg.get('custom_base_nodes_dirs', []) or []
+        self.groups_dir = cfg.get('groups_dir') or None
         self.cache_dir = cfg.get('cache_dir') or 'cache'
         self.data_dir = cfg.get('data_dir') or 'data'
         self.log_level = cfg.get('log_level') or 'INFO'
@@ -221,6 +226,8 @@ class KGraph:
             'load_default_base_nodes_dir': self.load_default_base_nodes_dir,
             'jump_links': self.jump_links or [],
             'custom_base_nodes_dirs': self.custom_base_nodes_dirs or [],
+            # only when set, so every other pipeline's graph_config.yaml stays byte-identical
+            **({'groups_dir': self.groups_dir} if self.groups_dir else {}),
             'cache_dir': self.cache_dir or 'cache',
             'data_dir': self.data_dir or 'data',
             'log_level': self.log_level or 'INFO',

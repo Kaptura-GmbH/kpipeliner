@@ -16,6 +16,8 @@ Serves the React frontend and provides:
 
 import argparse
 import asyncio
+import atexit
+import importlib.util
 import json
 import os
 import re
@@ -47,7 +49,8 @@ sys.path.insert(0, PIPELINER_DIR)
 
 from kpipeline import KGraph  # noqa: E402
 from kpipeline.src.kbase_nodes import (  # noqa: E402
-    get_group_base_nodes_dir, resolve_base_nodes_dirs, scan_base_nodes,
+    get_group_base_nodes_dir, resolve_base_nodes_dirs, resolve_groups_dir,
+    resolve_groups_dirs, scan_base_nodes,
 )
 from kpipeline.src.kpaths import (  # noqa: E402
     config_dir, config_path, ensure_user_config, kpl_command, kpl_env, mcp_install_hint,
@@ -69,6 +72,8 @@ app.add_middleware(
 
 # Work directory set by CLI argument
 _workdir: str = os.getcwd()
+#: The address this server is bound to; the UI-designer servers it starts bind to the same one.
+_bind_host: str = '127.0.0.1'
 
 # Active WebSocket connections
 _ws_clients: list[WebSocket] = []
@@ -378,23 +383,46 @@ async def save_config(request_data: dict):
     return JSONResponse({'ok': True, **_load_gui_config()})
 
 
+def _pipeline_groups_setting():
+    """The pipeline's `groups_dir` value as written in graph_config.yaml (None if unset)."""
+    try:
+        with open(_graph_config_path()) as f:
+            return (yaml.safe_load(f) or {}).get('groups_dir') or None
+    except Exception:
+        return None
+
+
+def _group_read_dirs() -> list:
+    """Directories group components are read from: the pipeline's `groups_dir` first,
+    then the installation-wide group_base_nodes dir (older exports)."""
+    return resolve_groups_dirs(config_dir(), _workdir, _pipeline_groups_setting())
+
+
+def _group_save_dir() -> str:
+    """Where an exported group is written: the pipeline's `groups_dir` (graph_config.yaml);
+    a pipeline that has not set one keeps the installation-wide group_base_nodes dir."""
+    return resolve_groups_dir(_workdir, _pipeline_groups_setting()) or get_group_base_nodes_dir(config_dir())
+
+
 def _list_group_components() -> list[dict]:
-    """Exported group components from the group_base_nodes dir, shaped like
-    node-type entries so the components panel can list and drag them. They
-    are listed after the base nodes, under 'groups/<category>'."""
-    gdir = get_group_base_nodes_dir(config_dir())
+    """Exported group components from the pipeline's groups_dir and the installation's
+    group_base_nodes dir (first one wins on a name clash), shaped like node-type
+    entries so the components panel can list and drag them. They are listed
+    after the base nodes, under 'groups/<category>'."""
     comps = []
-    if not os.path.isdir(gdir):
-        return comps
+    seen = set()
 
     def read(cat, fname, path):
         if not fname.endswith('.yaml'):
             return
         name = os.path.splitext(fname)[0]
+        if (cat, name) in seen:      # an earlier dir (the pipeline's groups_dir) has it
+            return
         try:
             cfg = yaml.safe_load(open(path)) or {}
         except Exception:
             return
+        seen.add((cat, name))
         comps.append({
             'type': f'{cat}/{name}' if cat else name,
             'description': cfg.get('description', ''),
@@ -409,15 +437,18 @@ def _list_group_components() -> list[dict]:
             'group_name': name,
         })
 
-    for entry in sorted(os.listdir(gdir)):
-        if entry.startswith('_') or entry.startswith('.'):
+    for gdir in _group_read_dirs():
+        if not os.path.isdir(gdir):
             continue
-        p = os.path.join(gdir, entry)
-        if os.path.isdir(p):
-            for f in sorted(os.listdir(p)):
-                read(entry, f, os.path.join(p, f))
-        else:
-            read('', entry, p)
+        for entry in sorted(os.listdir(gdir)):
+            if entry.startswith('_') or entry.startswith('.'):
+                continue
+            p = os.path.join(gdir, entry)
+            if os.path.isdir(p):
+                for f in sorted(os.listdir(p)):
+                    read(entry, f, os.path.join(p, f))
+            else:
+                read('', entry, p)
     return comps
 
 
@@ -1057,8 +1088,9 @@ async def save_graph(request_data: dict):
 async def export_group(request_data: dict):
     """
     Write a group (its meta, ports, child nodes with internal connections and
-    port routing) as a reusable component into the group_base_nodes dir:
-    <group_base_nodes>/<category>/<name>.yaml. External connections are
+    port routing) as a reusable component into the pipeline's `groups_dir`
+    (graph_config.yaml; without one: the installation's group_base_nodes dir):
+    <groups_dir>/<category>/<name>.yaml. External connections are
     main-graph specific and are dropped; positions are already group-relative.
     """
     gid = request_data.get('group_id')
@@ -1159,7 +1191,7 @@ async def export_group(request_data: dict):
         'jump_links': tpl_jump_links,
     }
 
-    gdir = get_group_base_nodes_dir(config_dir())
+    gdir = _group_save_dir()
     target_dir = os.path.join(gdir, category) if category else gdir
     path = os.path.join(target_dir, f'{name}.yaml')
     if os.path.exists(path) and not overwrite:
@@ -1175,12 +1207,16 @@ async def export_group(request_data: dict):
 @app.get('/api/group-component')
 def get_group_component(category: str = '', name: str = ''):
     """Return a group component template (for expansion on drop)."""
-    gdir = get_group_base_nodes_dir(config_dir())
     safe_cat = os.path.basename(category) if category else ''
     safe_name = os.path.basename(name)
-    parts = [gdir, safe_cat, f'{safe_name}.yaml'] if safe_cat else [gdir, f'{safe_name}.yaml']
-    path = os.path.join(*parts)
-    if not os.path.isfile(path):
+    path = None
+    for gdir in _group_read_dirs():     # the pipeline's groups_dir first
+        parts = [gdir, safe_cat, f'{safe_name}.yaml'] if safe_cat else [gdir, f'{safe_name}.yaml']
+        candidate = os.path.join(*parts)
+        if os.path.isfile(candidate):
+            path = candidate
+            break
+    if path is None:
         return JSONResponse({'ok': False, 'msg': 'Component not found.'}, status_code=404)
     try:
         tpl = yaml.safe_load(open(path)) or {}
@@ -1244,6 +1280,96 @@ async def run_pipeline(request_data: dict):
         threading.Thread(target=_run_pipeline, args=(cmd, _workdir), daemon=True).start()
 
     return JSONResponse({'ok': True})
+
+
+# ---------------------------------------------------------------------------
+# kwui node-UI designer (kwebui edit mode) — started on demand from the context menu
+# ---------------------------------------------------------------------------
+
+#: node type -> {'proc': Popen, 'port': int, 'tail': [last output lines]}
+_design_servers: dict = {}
+_design_lock = threading.Lock()
+_DESIGN_FIRST_PORT = 8801   # clear of the GUI's 8601+ and a kwui run's 8701+
+
+
+def _kwui_design_available() -> bool:
+    """kwebui with edit mode (>= 1.0.0) importable here — the `kpl` the designer is started
+    with runs in this same Python environment."""
+    try:
+        return importlib.util.find_spec('kwebui.editor') is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def _stop_design_servers():
+    for entry in list(_design_servers.values()):
+        proc = entry['proc']
+        if proc.poll() is None:
+            proc.terminate()
+
+
+atexit.register(_stop_design_servers)
+
+
+def _start_design_server(node_type: str) -> dict:
+    """`kpl kwui design <node_type>` as a background process (one per node type, reused
+    while it runs). Returns {'ok', 'port'} or {'ok': False, 'error'}."""
+    with _design_lock:
+        entry = _design_servers.get(node_type)
+        if entry and entry['proc'].poll() is None and _port_open(entry['port']):
+            return {'ok': True, 'port': entry['port'], 'reused': True}
+        port = _find_free_port(_bind_host, _DESIGN_FIRST_PORT)
+        if port is None:
+            return {'ok': False, 'error': 'No free port for the designer.'}
+        cmd = kpl_command() + ['kwui', 'design', node_type, '--no-browser',
+                               '--host', _bind_host, '--port', str(port)]
+        proc = subprocess.Popen(cmd, cwd=_workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, env=dict(os.environ, PYTHONUNBUFFERED='1'))
+        tail: list = []
+
+        def pump():
+            for line in proc.stdout:
+                tail.append(line.rstrip())
+                del tail[:-20]
+
+        threading.Thread(target=pump, daemon=True).start()
+        _design_servers[node_type] = {'proc': proc, 'port': port, 'tail': tail}
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if _port_open(port):
+                return {'ok': True, 'port': port}
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        message = ' '.join(tail[-3:]) or 'The designer did not start.'
+        if proc.poll() is None:
+            proc.terminate()
+        return {'ok': False, 'error': message}
+
+
+@app.get('/api/kwui/design')
+def kwui_design_available():
+    return JSONResponse({'available': _kwui_design_available()})
+
+
+@app.post('/api/kwui/design')
+async def kwui_design(request_data: dict):
+    node_type = str(request_data.get('node_type') or '')
+    if not re.fullmatch(r'\w+', node_type):
+        return JSONResponse({'ok': False, 'error': 'Invalid node type.'}, status_code=400)
+    if not _kwui_design_available():
+        return JSONResponse({'ok': False, 'error': 'The designer needs kwebui >= 1.0.0: '
+                                                   'uv pip install -U "kpipeliner[kwui]"'}, status_code=400)
+    result = await asyncio.to_thread(_start_design_server, node_type)
+    return JSONResponse(result, status_code=200 if result.get('ok') else 500)
 
 
 def _cache_uuid() -> str:
@@ -1552,12 +1678,13 @@ def _find_free_port(host, start, tries=100):
 
 
 def main():
-    global _workdir, _loop
+    global _workdir, _loop, _bind_host
 
     args = _parse_args()
     _workdir = os.path.abspath(args.workdir)
     os.chdir(_workdir)
     ensure_user_config()
+    _bind_host = args.host
 
     if args.mcp:
         try:

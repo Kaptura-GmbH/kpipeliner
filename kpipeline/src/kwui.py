@@ -40,6 +40,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -116,7 +117,7 @@ def _status_of(msg):
 WIDGETS_ENV = 'KPL_KWUI_WIDGETS'
 
 #: UIProxy's own methods — valid on `self.ui` but not widget names.
-_UI_METHODS = ('interact', 'end', 'clear', 'jump_to')
+_UI_METHODS = ('interact', 'end', 'clear', 'jump_to', 'load_layout')
 
 #: KApp's own methods (kwebui/app.py) — also valid on `self.ui`, but routed to
 #: the app object itself rather than treated as "create a widget of this
@@ -152,6 +153,68 @@ def _unknown_call_error(name, allowed):
     suggestions = difflib.get_close_matches(name, candidates, n=1)
     hint = f" Did you mean '{suggestions[0]}'?" if suggestions else ''
     return AttributeError(f"self.ui has no widget or method '{name}'.{hint}")
+
+
+# ---------------------------------------------------------------------------
+# Designed layouts (kwebui edit mode) — shared by both sides
+# ---------------------------------------------------------------------------
+
+#: Default layout file of a node, next to its node.py. `kpl kwui design <node_type>` writes it,
+#: `self.ui.load_layout()` reads it.
+LAYOUT_FILE = 'ui.layout.json'
+#: Pseudo widget id under which layout handlers travel: a layout names a handler by METHOD
+#: name (not per widget), so the relayed event carries (this id, the method name).
+LAYOUT_CB_ID = '__layout__'
+
+
+def layout_path(node_dir, path=None):
+    """Absolute path of a node's layout file; a relative `path` is taken against the
+    node's own directory (not the pipeline's)."""
+    candidate = os.path.expanduser(str(path or LAYOUT_FILE))
+    return candidate if os.path.isabs(candidate) else os.path.join(node_dir or os.getcwd(), candidate)
+
+
+def _inspect_layout(node, path, handlers, allowed):
+    """Read and validate a layout file on the NODE side (needs no kwebui — the node may
+    run in a venv without it). Same strictness as kwebui's own `load_layout`: a handler the
+    node does not have, or a widget type kwebui does not know, is an error NOW rather than
+    a dead button later. Returns (abspath, {handler name: callable}, ids, {columns id: [column ids]})."""
+    abspath = layout_path(getattr(node, 'node_dir', None), path)
+    if not os.path.isfile(abspath):
+        raise FileNotFoundError(
+            f'kwui layout not found: {abspath} — design it with: kpl kwui design '
+            f'{getattr(node, "node_type", None) or "<node_type>"}')
+    with open(abspath, encoding='utf-8') as handle:
+        doc = json.load(handle)
+    if not isinstance(doc, dict) or 'widgets' not in doc:
+        raise ValueError(f"{abspath} is not a kwebui layout file (expected a JSON object with a 'widgets' key).")
+    target = handlers if handlers is not None else node
+    callables, ids, columns = {}, [], {}
+
+    def walk(nodes):
+        for item in nodes:
+            widget_id, widget_type = item.get('id'), item.get('type')
+            if not widget_id or not widget_type:
+                raise ValueError(f"Layout node is missing 'type' or 'id': {item!r}")
+            if widget_id in ids:
+                raise ValueError(f'Duplicate widget id {widget_id!r} in {abspath} — ids must be unique.')
+            if allowed is not None and widget_type not in allowed:
+                raise ValueError(f'Layout widget {widget_id!r}: unknown widget type {widget_type!r}.')
+            ids.append(widget_id)
+            for event, name in (item.get('handlers') or {}).items():
+                function = getattr(target, name, None)
+                if not callable(function):
+                    raise ValueError(f'Layout widget {widget_id!r} wants {event}={name!r}, but '
+                                     f'{type(target).__name__} has no callable attribute {name!r}.')
+                callables[name] = function
+            children = item.get('children') or []
+            if widget_type == 'columns':
+                # kwebui names an unnamed column <columns id>-c<i> (same rule as columns() itself)
+                columns[widget_id] = [c.get('id') or f'{widget_id}-c{i}' for i, c in enumerate(children)]
+            walk(children)
+
+    walk(doc['widgets'])
+    return abspath, callables, ids, columns
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +291,9 @@ class UIWidgetRef:
     # when it sees `type == 'columns'`; anything else raises TypeError, same
     # as indexing a real Python object that doesn't support it.
     def __getitem__(self, index):
+        column_ids = self.__dict__.get('_column_ids')  # columns of a designed layout: ids chosen in the editor
+        if column_ids is not None:
+            return UIWidgetRef(self._proxy, column_ids[index])
         count = self.__dict__.get('_count')
         if count is None:
             raise TypeError(f"'{self._id}' does not support indexing (not a columns widget)")
@@ -236,6 +302,9 @@ class UIWidgetRef:
         return UIWidgetRef(self._proxy, f'{self._id}-c{index}')
 
     def __len__(self):
+        column_ids = self.__dict__.get('_column_ids')
+        if column_ids is not None:
+            return len(column_ids)
         count = self.__dict__.get('_count')
         if count is None:
             raise TypeError(f"'{self._id}' has no length (not a columns widget)")
@@ -370,6 +439,26 @@ class UIProxy:
         sequence fails this node with a message listing the valid names."""
         return self.end(STATUS_JUMP, node_name)
 
+    def load_layout(self, path=None, handlers=None):
+        """Show a page designed visually with `kpl kwui design <node_type>` (kwebui edit
+        mode) and return `{widget id: widget handle}`, ids as named in the editor:
+
+            ui = self.ui.load_layout()                    # <node_dir>/ui.layout.json
+            ui["status"].update(text="ready")
+            ui["cols"][0].text("left column")             # columns by position
+
+        A handler named in the layout (editor field "Handlers") is looked up as a method on
+        `handlers` — this node by default — so `on_click: on_save` calls `self.on_save`. A
+        handler the node lacks, a missing file or an unknown widget type raises here. A
+        relative `path` is relative to the node's own directory. Further widgets
+        (`self.ui.text(...)`) may follow; they land below the layout."""
+        abspath, callables, ids, columns = _inspect_layout(self._node, path, handlers, self._allowed)
+        with self._lock:
+            for name, function in callables.items():
+                self._handlers[(LAYOUT_CB_ID, name)] = function
+        self._send({'op': 'load_layout', 'path': abspath, 'handlers': sorted(callables)})
+        return _layout_refs(self, ids, columns)
+
     # -- internals ----------------------------------------------------------
 
     def _next_id(self):
@@ -445,12 +534,55 @@ class UIProxy:
             self._node.log(f'kwui callback failed:\n{traceback.format_exc()}', 'error')
 
 
+def _layout_refs(proxy, ids, columns):
+    refs = {widget_id: UIWidgetRef(proxy, widget_id) for widget_id in ids}
+    for widget_id, column_ids in columns.items():
+        refs[widget_id]._column_ids = column_ids
+        for column_id in column_ids:
+            refs.setdefault(column_id, UIWidgetRef(proxy, column_id))
+    return refs
+
+
+class NoopRef:
+    """What a widget call returns under `NoopUI` (a plain `kpl run`): the stand-in for
+    UIWidgetRef, so `label = self.ui.text(...); label.update(text=...)`, `cols[0].button(...)`
+    and `layout["save"].update(...)` run exactly as they do with a live UI. A widget type
+    name creates a child (another NoopRef), any other name is a method call that is
+    discarded and returns the handle again (chaining), like UIWidgetRef."""
+
+    def __init__(self, allowed):
+        self._allowed = allowed
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        if self._allowed is not None and name in self._allowed:
+            return lambda *args, **kwargs: NoopRef(self._allowed)
+        return lambda *args, **kwargs: self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, tb):
+        return False
+
+    def __getitem__(self, index):
+        return NoopRef(self._allowed)
+
+    def __len__(self):
+        return 0
+
+    def __iter__(self):
+        return iter(())
+
+
 class NoopUI:
     """`self.ui` for a kwui-enabled node running *without* a bridge (a plain
     `kpl run`). Every widget call is discarded and `interact()` returns
     immediately, so the same node.py works in both modes unchanged."""
 
-    def __init__(self):
+    def __init__(self, node=None):
+        self._node = node
         self._allowed = _allowed_widget_names()
 
     def __getattr__(self, name):
@@ -463,7 +595,7 @@ class NoopUI:
             raise _unknown_call_error(name, self._allowed)
 
         def noop(*args, **kwargs):
-            return self if name not in _APP_METHODS else None
+            return NoopRef(self._allowed) if name not in _APP_METHODS else None
 
         return noop
 
@@ -496,6 +628,12 @@ class NoopUI:
     def clear(self):
         return self
 
+    def load_layout(self, path=None, handlers=None):
+        """Validated like the live one (a missing file / handler / widget type fails in a
+        plain `kpl run` too), then every id maps to this no-op object."""
+        _, _, ids, _ = _inspect_layout(self._node, path, handlers, self._allowed)
+        return {widget_id: NoopRef(self._allowed) for widget_id in ids}
+
     def interact(self, timeout=None):
         return STATUS_OKAY
 
@@ -511,6 +649,31 @@ class NoopUI:
 # ---------------------------------------------------------------------------
 # Parent side — the bridge
 # ---------------------------------------------------------------------------
+
+
+def _prefix_layout_ids(nodes, prefix):
+    """Prefix every id of a layout document in place (columns' children included)."""
+    for item in nodes:
+        if item.get('id'):
+            item['id'] = prefix + item['id']
+        _prefix_layout_ids(item.get('children') or [], prefix)
+
+
+class _LayoutRelay:
+    """The `handlers=` object for kwebui's `load_layout` on the parent side: every method
+    name the node declared resolves to a callback that sends the event down to the node,
+    where the node's own method runs. Anything else is not an attribute, so kwebui raises
+    its usual "has no callable attribute" error."""
+
+    def __init__(self, decode, names):
+        self._decode = decode
+        self._names = names
+
+    def __getattr__(self, name):
+        if name.startswith('_') or name not in self._names:
+            raise AttributeError(name)
+        return self._decode(LAYOUT_CB_ID, {CB_MARKER: name})
+
 
 _active_bridge = None
 
@@ -669,6 +832,7 @@ class KwuiBridge:
         self.container = container
         self.app = app  # the KApp itself — only needed for _APP_METHODS calls
         self._widgets = {}
+        self._layout_seq = 0   # never reset: layout id prefixes stay unique for the whole run
         self._stdin = None
         self._stdin_lock = threading.Lock()
         self._statuses = {}
@@ -1074,6 +1238,8 @@ class KwuiBridge:
             self._create(message)
         elif op == 'create_child':
             self._create_child(message)
+        elif op == 'load_layout':
+            self._load_layout(message)
         elif op == 'call':
             self._call(message)
         elif op == 'app_call':
@@ -1147,6 +1313,47 @@ class KwuiBridge:
             self._widgets[child_id] = factory(*args, **kwargs)
         except Exception as exc:
             print(f'[kwui] cannot create child {widget_type!r}: {exc}', flush=True)
+
+    def _load_layout(self, message):
+        """Build a designed layout (kwebui edit mode's JSON) into the current page.
+
+        Every id in the layout gets a prefix unique to THIS load: kwebui finds the target
+        of a browser event with `page.find(id)` — the first match — and history pages keep the
+        widgets of several nodes alive at once, so two nodes that both name a widget "save"
+        would otherwise swap clicks. The node keeps using the ids it knows: the real widgets
+        are registered under the original ids. Uses only kwebui's public `load_layout`
+        (through a temporary copy of the file with prefixed ids); the layout's page settings
+        (width/theme) are dropped, since the workflow page owns those. Handlers named in
+        the layout become relays to the node's own methods (see LAYOUT_CB_ID)."""
+        if self._fresh:
+            self._clear()
+        path = message.get('path')
+        try:
+            from kwebui.editor import load_layout, read_layout
+            doc = read_layout(path)
+        except Exception as exc:
+            print(f'[kwui] cannot read layout {path!r}: {exc}', flush=True)
+            return
+        self._layout_seq += 1
+        prefix = f'kl{self._layout_seq}-'
+        doc.pop('page', None)
+        _prefix_layout_ids(doc.get('widgets') or [], prefix)
+        relay = _LayoutRelay(self._decode, set(message.get('handlers') or ()))
+        temp = None
+        try:
+            with tempfile.NamedTemporaryFile('w', suffix='.layout.json', delete=False,
+                                             encoding='utf-8') as handle:
+                temp = handle.name
+                json.dump(doc, handle)
+            built = load_layout(self._out, temp, handlers=relay)
+        except Exception as exc:
+            print(f'[kwui] cannot load layout {path!r}: {exc}', flush=True)
+            return
+        finally:
+            if temp:
+                os.unlink(temp)  # our own temporary copy
+        for internal_id, widget in built.items():
+            self._widgets[internal_id[len(prefix):] if internal_id.startswith(prefix) else internal_id] = widget
 
     def _call(self, message):
         widget = self._widgets.get(message.get('id'))
@@ -1466,4 +1673,51 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
     if open_browser:
         threading.Thread(target=_open_when_ready, args=(app, local_url),
                          daemon=True).start()
+    app.run(host=host, port=port, log_level=log_level)
+
+
+class _AnyHandler:
+    """`handlers=` for the DESIGNER: any handler name a layout mentions is accepted (it only
+    resolves later, in the node), so a layout naming `on_save` opens in the editor."""
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
+
+
+def run_design(layout_file, *, title='Node UI design', host=DEFAULT_HOST, port=DEFAULT_PORT,
+               open_browser=True, log_level='warning'):
+    """Serve kwebui's visual editor (edit mode) on a node's layout file and block until
+    interrupted. The file is created on the first change if it does not exist yet; every
+    change is written to it at once (no save step). The node shows the result with
+    `self.ui.load_layout()`. A layout's page settings (width, theme) are only for
+    designing: at run time the workflow page owns them (see KwuiBridge._load_layout)."""
+    from kwebui import KApp
+    from kwebui.editor import load_layout
+
+    class Designer(KApp):
+        def build(self):
+            # Also records the path, which edit mode uses as "the file this app is made of".
+            load_layout(self, layout_file, handlers=_AnyHandler())
+
+    app = Designer(title=title, edit_mode=True)
+
+    requested_port = port
+    port = _find_free_port(host, requested_port)
+    if port is None:
+        print(f'No free port found in range {requested_port}–{requested_port + 99}.', flush=True)
+        return
+    if port != requested_port:
+        print(f'\nPort {requested_port} is in use — serving the designer on port {port}.', flush=True)
+    browsable_host = 'localhost' if host in ('0.0.0.0', '::') else host
+    local_url = f'http://{browsable_host}:{port}'
+    print(f'\nLayout file → {layout_file}', flush=True)
+    print(f'Designer → {local_url}   (changes are saved as you make them; CTRL+C to stop)', flush=True)
+    if host in ('0.0.0.0', '::'):
+        lan_ip = _lan_ip()
+        if lan_ip:
+            print(f'On the network → http://{lan_ip}:{port}', flush=True)
+    if open_browser:
+        threading.Thread(target=_open_when_ready, args=(app, local_url), daemon=True).start()
     app.run(host=host, port=port, log_level=log_level)

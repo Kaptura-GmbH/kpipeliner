@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The CLI lives inside the package (kpipeline/kpipeline.py) and is started as a MODULE:
+# running that file by path would shadow the package. PYTHONPATH makes this checkout importable.
+PYTHONPATH="/mnt/think4t/projects/ahkgit/kpipeliner-public-release${PYTHONPATH:+:$PYTHONPATH}" exec "/mnt/think4t/projects/ahkgit/kpipeliner-public-release/.venv/bin/python3" -m kpipeline.kpipeline "$@"

@@ -750,7 +750,7 @@ class KNode:
         # After _setup_logging(): UIProxy writes to the saved _real_stdout.
         if self.kwui:
             from kpipeline.src.kwui import NoopUI, UIProxy
-            self.ui = UIProxy(self) if args.kwui_bridge else NoopUI()
+            self.ui = UIProxy(self) if args.kwui_bridge else NoopUI(self)
         return args
 
     # ------------------------------------------------------------------

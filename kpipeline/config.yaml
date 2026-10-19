@@ -14,9 +14,11 @@
 # in its graph_config.yaml. (Legacy key name: base_nodes)
 default_base_nodes_dir: base_nodes
 
-# Directory for groups exported from the GUI as reusable components. Components are
-# stored as <group_base_nodes>/<category>/<name>.yaml and appear in the components
-# panel under 'groups/<category>'.
+# Fallback directory for groups exported from the GUI as reusable components, used by
+# pipelines whose graph_config.yaml has no `groups_dir` (that key — relative to the pipeline
+# directory, or absolute — is where such a pipeline saves and first looks for its groups).
+# Components are stored as <dir>/<category>/<name>.yaml and appear in the components
+# panel under 'groups/<category>'; this folder is still listed after the pipeline's own.
 group_base_nodes: group_base_nodes
 
 # Whether a `nodes.X.Y` input reference is resolved lazily (the node's own process

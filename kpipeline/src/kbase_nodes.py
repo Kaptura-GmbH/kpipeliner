@@ -95,8 +95,34 @@ def resolve_base_nodes_dirs(pipeliner_dir, load_default=True, custom_dirs=None,
 
 def get_group_base_nodes_dir(pipeliner_dir):
     """Resolve the exported-group components directory from config.yaml
-    (key: group_base_nodes)."""
+    (key: group_base_nodes) — the installation-wide fallback; a pipeline's own
+    `groups_dir` (graph_config.yaml) is resolved by resolve_groups_dir."""
     return _dir_from_config(pipeliner_dir, 'group_base_nodes', DEFAULT_GROUP_BASE_NODES)
+
+
+def resolve_groups_dir(pipeline_dir, configured):
+    """Absolute path of a pipeline's `groups_dir` (graph_config.yaml: relative to the
+    pipeline dir, or absolute), or None when the pipeline does not set one."""
+    if not configured:
+        return None
+    path = os.path.expanduser(str(configured))
+    if not os.path.isabs(path):
+        path = os.path.join(pipeline_dir or os.getcwd(), path)
+    return os.path.normpath(path)
+
+
+def resolve_groups_dirs(pipeliner_dir, pipeline_dir, configured):
+    """Ordered group-template directories to READ: the pipeline's `groups_dir` first (a
+    group there overrides one of the same name below), then the installation-wide
+    group_base_nodes dir, so groups exported before a pipeline had a `groups_dir` stay available."""
+    dirs = []
+    own = resolve_groups_dir(pipeline_dir, configured)
+    if own:
+        dirs.append(own)
+    shared = get_group_base_nodes_dir(pipeliner_dir)
+    if shared not in dirs:
+        dirs.append(shared)
+    return dirs
 
 
 def scan_base_nodes(base_nodes_dirs):

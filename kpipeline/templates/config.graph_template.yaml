@@ -27,6 +27,11 @@ load_default_base_nodes_dir: true
 # clash the custom node type wins.
 custom_base_nodes_dirs: []
 
+# Where groups exported from the GUI (right-click a group -> export) are saved, and
+# read from first: absolute, or relative to this pipeline directory. Without this key
+# the installation-wide group_base_nodes dir (config.yaml) is used.
+groups_dir: groups
+
 # Where this pipeline's cache/ and data/ live. Relative to this pipeline
 # directory, or an absolute path (starting with '/') to store them elsewhere
 # (e.g. a large disk shared by several pipelines).

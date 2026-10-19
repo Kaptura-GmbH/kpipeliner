@@ -75,6 +75,7 @@ kpl run                  # run it (or: kpl gui to do all of this visually)
 | `kpl run [node]` | Run the declared outputs (or one node) + dependencies |
 | `kpl run_debug [node]` | Same, with full log output |
 | `kpl run --kwui` | Run behind a per-node web UI (kwebui) |
+| `kpl kwui design <node_type>` | Design a node's web UI visually (kwebui edit mode) |
 | `kpl tree` | Print the graph with dependencies and I/O |
 | `kpl status` | Show cached/frozen state per node |
 | `kpl clean [node]` | Clear cache (all nodes, or one) |

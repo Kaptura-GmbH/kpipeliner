@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, useEffect, useMemo } from 'react'
+import axios from 'axios'
 import ReactFlow, {
   Background,
   Controls,
@@ -23,7 +24,7 @@ const EMPTY_HANDLE_COLORS = {}
 const EMPTY_HANDLE_SET = new Set()
 
 // ── Context menu ───────────────────────────────────────────────────────────
-function ContextMenu({ x, y, nodeId, ioFlags, frozen, nodeTypes: ntypes, onClose, onAddNode, onDeleteNode, onRunNode, onAddGroup, onDuplicateNode, onRemoveFromGroup, onToggleIOFlag }) {
+function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntypes, onClose, onEditUI, onAddNode, onDeleteNode, onRunNode, onAddGroup, onDuplicateNode, onRemoveFromGroup, onToggleIOFlag }) {
   const [expandedCat, setExpandedCat] = useState(null)
   const cats = {}
   ntypes.forEach(nt => {
@@ -40,6 +41,9 @@ function ContextMenu({ x, y, nodeId, ioFlags, frozen, nodeTypes: ntypes, onClose
             <div className="ctx-menu-label">Node: {nodeId}</div>
             <div className="ctx-menu-item" onClick={() => { onRunNode(nodeId); onClose() }}>▶ Run this node</div>
             <div className="ctx-menu-item" onClick={() => { onDuplicateNode(nodeId); onClose() }}>⧉ Duplicate</div>
+            {canEditUI && (
+              <div className="ctx-menu-item" onClick={() => { onEditUI(nodeId); onClose() }}>✎ Edit UI</div>
+            )}
             {ioFlags && (
               <>
                 <div className="ctx-menu-item" onClick={() => { onToggleIOFlag(nodeId, 'is_input'); onClose() }}>
@@ -132,6 +136,12 @@ function GraphInner({
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [ctxMenu, setCtxMenu] = useState(null)
+  // "Edit UI" on a kwui node opens kwebui's edit mode for that node type — only offered when
+  // the server's Python environment has a kwebui that has edit mode.
+  const [kwuiDesign, setKwuiDesign] = useState(false)
+  useEffect(() => {
+    axios.get('/api/kwui/design').then(r => setKwuiDesign(!!r.data?.available)).catch(() => {})
+  }, [])
   // Jump-port reveal state: a node's jump-out shows on plain hover; while
   // dragging a connection from a jump-out, the hovered *other* node reveals
   // its jump-in instead. Transient UI state only, never persisted.
@@ -1004,6 +1014,22 @@ function GraphInner({
         : null,
       // Cache freezing applies to executable nodes only (groups have no cache).
       frozen: node.type === 'ioNode' ? !!node.data?.frozen : null,
+      nodeType: node.type === 'ioNode' ? node.data?.node_type : null,
+      isKwui: node.type === 'ioNode' && !!node.data?.is_kwui,
+    })
+  }, [])
+
+  // Opens the designer in a NEW tab. The tab is opened right away, inside the click — browsers
+  // block a window opened after an async request — and pointed at the designer once it is up.
+  const editNodeUI = useCallback(nodeType => {
+    const tab = window.open('', '_blank')
+    axios.post('/api/kwui/design', { node_type: nodeType }).then(r => {
+      const url = `${window.location.protocol}//${window.location.hostname}:${r.data.port}`
+      if (tab) tab.location.href = url
+      else window.open(url, '_blank')
+    }).catch(err => {
+      if (tab) tab.close()
+      window.alert(`Could not open the UI designer: ${err.response?.data?.error || err.message}`)
     })
   }, [])
 
@@ -1089,6 +1115,8 @@ function GraphInner({
       {ctxMenu && (
         <ContextMenu
           x={ctxMenu.x} y={ctxMenu.y} nodeId={ctxMenu.nodeId} ioFlags={ctxMenu.ioFlags} frozen={ctxMenu.frozen ?? null} nodeTypes={ntypes}
+          canEditUI={kwuiDesign && !!ctxMenu.isKwui}
+          onEditUI={nid => editNodeUI(ctxMenu.nodeType)}
           onToggleIOFlag={onToggleIOFlag}
           onClose={() => setCtxMenu(null)}
           onAddNode={type => onAddNodeAtPosition(type, ctxMenu.flowPos || { x: 200, y: 200 })}

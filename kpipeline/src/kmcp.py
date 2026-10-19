@@ -98,6 +98,7 @@ def get_graph(workdir):
         'outputs': graph.output_nodes,
         'custom_base_nodes_dirs': graph.custom_base_nodes_dirs,
         'load_default_base_nodes_dir': graph.load_default_base_nodes_dir,
+        'groups_dir': graph.groups_dir,
         'missing_nodes': graph.missing_nodes,
         'nodes': [
             {

@@ -33,7 +33,7 @@ mcp = ["mcp>=2.0.0"]
 # `kpl run --kwui`: serve each node's own web UI as a step-by-step workflow. kwebui
 # itself needs Python >= 3.12, so on 3.10/3.11 this extra installs nothing and
 # `kpl run --kwui` says so.
-kwui = ["kwebui; python_version >= '3.12'"]
+kwui = ["kwebui>=1.0.0; python_version >= '3.12'"]
 all = ["kpipeliner[mcp,kwui]"]
 
 [project.urls]

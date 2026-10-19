@@ -439,7 +439,7 @@ A group with defined ports can be exported as a **component** and reused in any 
 2. In the Properties panel, under **Export as Component**, choose a category (or type a new one).
 3. Click **⬆ Export Group**.
 
-The component (the group with its child nodes, internal wiring and ports) is saved as a template under the `group_base_nodes` directory and immediately appears in the Components panel under **groups/&lt;category&gt;**, marked with the ⊞ icon. Exporting to an existing name asks for confirmation before overwriting.
+The component (the group with its child nodes, internal wiring and ports) is saved as a template under the pipeline's **`groups_dir`** (set in its `graph_config.yaml`; new pipelines get `groups_dir: groups`) and immediately appears in the Components panel under **groups/&lt;category&gt;**, marked with the ⊞ icon. Exporting to an existing name asks for confirmation before overwriting. A pipeline whose `graph_config.yaml` has no `groups_dir` keeps using the installation-wide `group_base_nodes` folder from `config.yaml` (add the key to switch). The Components panel lists the pipeline's `groups_dir` first and the installation folder after it, so groups exported earlier stay available; on a name clash the pipeline's own group wins.
 
 Dropping a group component onto the canvas expands it into a fresh group with new, collision-free node names — you can then wire its ports and adjust inputs like any other part of the graph. Note: connections to nodes *outside* the group are not part of the template; only the internal structure and the ports are.
 
@@ -691,6 +691,7 @@ kpl run my_node_1
 | `kpl run --no-parallel` | Run nodes sequentially |
 | `kpl run_debug [<node>]` | Run with full log output |
 | `kpl kwui init` | Create `workflow.py` for the kwebui workflow UI (see §8) |
+| `kpl kwui design <node_type>` | Design a node's UI page visually (kwebui edit mode, see §8.6) |
 | `kpl run --kwui` / `kpl run_debug --kwui` | Run sequentially behind that workflow UI |
 | `kpl run --kwui --kwui-host H --kwui-port P` | Serve that UI elsewhere (`--kwui-no-browser` to not open a tab) |
 | `kpl tree` | Print the graph with dependencies and inputs/outputs |
@@ -719,6 +720,9 @@ custom_base_nodes_dirs: []          # extra dirs with node types (absolute, or
                                     # relative to the pipeline dir); scanned
                                     # before the default — a custom type with
                                     # the same name wins
+groups_dir: groups                  # where groups exported from the GUI are saved (and read
+                                    # first); absolute, or relative to the pipeline dir.
+                                    # Without it: the installation's group_base_nodes folder
 
 cache_dir: cache        # where node outputs live; relative to the pipeline
                         # dir, or absolute (starts with '/') to store cache
@@ -746,7 +750,7 @@ nodes: [...]            # managed by kpl add / the GUI
 ```yaml
 default_base_nodes_dir: base_nodes     # default dir for installed node types (relative to this
                                         # file's folder, or absolute)
-group_base_nodes: group_base_nodes      # where exported group components live
+group_base_nodes: group_base_nodes      # fallback folder for exported groups of pipelines without a `groups_dir`
 lazy_input_resolution: true
 kwui: {host: 0.0.0.0, port: 8701, open_browser: true}
 gui:
@@ -1043,6 +1047,9 @@ a message, as before.)
   versions of a node.
 - After the last step, the page stays up so you can look at the final state —
   stop it with CTRL+C in the terminal.
+- kwebui 1.0 shows the page in ONE browser tab at a time: opening it in a second tab
+  (or from another computer) takes the session over, and the first tab shows
+  "superseded" with a Reload button.
 - Current limits:
   - **Nothing reads back.** A handle is one-way, so you can't ask a widget for its
     current value (`checkbox.checked`, `imagestream.latest_frame()`). You don't
@@ -1058,6 +1065,39 @@ a message, as before.)
     (kwebui itself is the same; it does no conversion of its own). For pictures
     that means saving a file and passing its path to `image(...)`, or
     JPEG-encoding to bytes for `imagestream`.
+
+### 8.6 Designing a node's page visually
+
+A node's page does not have to be written in code. With **kwebui 1.0 or newer** (`kpipeliner[kwui]`)
+you can lay it out in the browser and let the node load it.
+
+```bash
+kpl kwui design <node_type>        # opens the editor on <node folder>/ui.layout.json
+```
+
+In the GUI, **right-click a `UI` node → Edit UI** does the same and opens the editor in a new tab
+(the entry only appears when kwebui with edit mode is installed).
+
+In the editor: right-click inside a container to insert a widget, click a widget to change its
+properties, drag to move or reorder, drag the gap between two columns to resize. Everything is saved
+to the file immediately — there is no save button. Give each widget an **id** (that is the name your
+code will use) and, for buttons and other callbacks, type the **name of a method** of your node in the
+*Handlers* field.
+
+In `node.py`:
+
+```python
+page = self.ui.load_layout()                    # reads ui.layout.json next to node.py
+page["title"].update(text="Camera 1")           # use a widget by the id from the editor
+page["cols"][1].text("goes into the second column")
+self.ui.interact()
+```
+
+A callback named in the editor (say `on_save`) simply calls `self.on_save()` of your node. If the file is
+missing, a widget type is unknown or a named method does not exist, the node stops with a clear error.
+Two nodes may use the same ids; they never mix up clicks. The page width and theme set in the editor
+only apply while designing — the workflow page decides them at run time. The same `node.py` still runs
+in a plain `kpl run` (the page calls are ignored there).
 
 ## 9. Underlying groups — driving a group from node code
 

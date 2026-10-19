@@ -339,6 +339,51 @@ class Pipeliner:
         print(f'Created {WORKFLOW_FILE}. Run the pipeline with: kpl run --kwui')
         return True
 
+    def kwui_design(self, node_type=None, layout=None, host=None, port=None,
+                    open_browser=None):
+        """Open kwebui's visual editor (edit mode) on a node's UI layout file.
+
+        The node shows the result with `self.ui.load_layout()`. The file is the node's
+        `ui.layout.json` (next to node.py) unless `layout` names another one.
+        host/port/open_browser: None -> config.yaml's `kwui:` section defaults."""
+        if importlib.util.find_spec('kwebui') is None:
+            print("The designer needs the optional 'kwebui' package (it requires Python >= 3.12), "
+                  "which is not installed.")
+            print('Install it with: uv pip install "kpipeliner[kwui]"   '
+                  f'(or: {sys.executable} -m pip install "kpipeliner[kwui]")')
+            return False
+        if importlib.util.find_spec('kwebui.editor') is None:
+            print('This kwebui has no edit mode (needs kwebui >= 1.0.0). Upgrade it with: '
+                  'uv pip install -U "kpipeliner[kwui]"   '
+                  f'(or: {sys.executable} -m pip install -U "kpipeliner[kwui]")')
+            return False
+        from kpipeline.src.kwui import layout_path, run_design
+        if layout:
+            target = os.path.abspath(os.path.expanduser(layout))
+            title = f'UI design: {os.path.basename(target)}'
+        else:
+            if not node_type:
+                print('Name a node type (kpl kwui design <node_type>) or a file (--layout FILE).')
+                return False
+            dirs = None
+            if os.path.exists(self.GRAPH_CONFIG):
+                graph = KGraph(verbose=False)
+                graph.load_from_yaml(self.GRAPH_CONFIG)
+                dirs = graph.get_base_nodes_dirs()
+            node_dir = find_node_dir(node_type, config_dir(), dirs=dirs)
+            if not node_dir:
+                print(f"Node type '{node_type}' not found in base nodes"
+                      f"{' (' + ', '.join(dirs) + ')' if dirs else ''}.")
+                return False
+            target = layout_path(node_dir)
+            title = f'UI design: {node_type}'
+        defaults = _kwui_server_defaults()
+        run_design(target, title=title,
+                   host=host or defaults['host'],
+                   port=port or defaults['port'],
+                   open_browser=defaults['open_browser'] if open_browser is None else open_browser)
+        return True
+
     def run_kwui(self, use_cache=False, debug=False, host=None, port=None,
                  open_browser=None):
         """Run the pipeline through workflow.py's kwebui UI.
@@ -1434,6 +1479,16 @@ def main():
     p_kwui = sub.add_parser('kwui', help='Manage the kwebui workflow UI')
     kwui_sub = p_kwui.add_subparsers(dest='kwui_command', required=True)
     kwui_sub.add_parser('init', help='Create workflow.py in this pipeline directory')
+    p_design = kwui_sub.add_parser(
+        'design', help="Design a node's UI visually (kwebui edit mode); the node loads it "
+                       "with self.ui.load_layout()")
+    p_design.add_argument('node_type', nargs='?',
+                          help="Node type; its layout file is <node dir>/ui.layout.json")
+    p_design.add_argument('--layout', metavar='FILE', default=None,
+                          help='Edit this layout file instead (created if missing)')
+    p_design.add_argument('--host', default=None, help="Bind address (default: config.yaml kwui.host)")
+    p_design.add_argument('--port', type=int, default=None, help="First port to try (default: config.yaml kwui.port)")
+    p_design.add_argument('--no-browser', action='store_true', help="Do not open a browser tab")
 
     # tree
     sub.add_parser('tree', help='Print graph tree')
@@ -1542,6 +1597,9 @@ def main():
     elif args.command == 'kwui':
         if args.kwui_command == 'init':
             p.kwui_init()
+        elif args.kwui_command == 'design':
+            p.kwui_design(args.node_type, layout=args.layout, host=args.host, port=args.port,
+                          open_browser=False if args.no_browser else None)
 
     elif args.command == 'tree':
         p.tree()

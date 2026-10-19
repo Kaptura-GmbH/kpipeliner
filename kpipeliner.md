@@ -63,6 +63,9 @@ load_default_base_nodes_dir: true   # include the machine-wide default node dir
 custom_base_nodes_dirs: []          # extra dirs with node types; absolute or relative
                                     # to this pipeline dir; scanned BEFORE the default,
                                     # so a custom type wins on a name clash
+groups_dir: groups                  # where groups exported from the GUI are saved (and read first);
+                                    # absolute or relative to this pipeline dir. Unset -> the
+                                    # installation's group_base_nodes dir (config.yaml)
 
 cache_dir: cache             # where results (cache/<uuid>/<node>/outputs.yaml) live;
                               # relative to this pipeline dir, or absolute (starts with '/')
@@ -150,6 +153,7 @@ kpl run process_1           # one node + its dependencies
 kpl run --no-use-cache      # force recompute
 kpl run_debug [node]        # full node output (use when a node fails)
 kpl kwui init               # create workflow.py for the kwebui workflow UI (see §7)
+kpl kwui design <node_type> # design a node's UI page visually (kwebui edit mode, see §7.5)
 kpl run --kwui              # run sequentially behind that UI (--kwui-host/--kwui-port)
 kpl run process_1 --params iterations 10   # override an input for this run
 kpl clean [node]            # clear cache (all non-frozen nodes, or one node)
@@ -373,8 +377,8 @@ Accessing any of these on a slot that isn't bound in this pipeline raises
 `RuntimeError` naming the slot, not a bare `KeyError`.
 
 If a slot's `address` (category/name of a group exported as a reusable
-component from the GUI — a `<group_base_nodes>/<category>/<name>.yaml`
-template, see the User Guide's Groups section) resolves when a node is
+component from the GUI — a `<groups_dir>/<category>/<name>.yaml`
+(the pipeline's `groups_dir`, else the installation's `group_base_nodes`) template, see the User Guide's Groups section) resolves when a node is
 created, the GUI auto-instantiates and binds that component immediately; if
 it doesn't resolve, the GUI asks whether to create the node anyway (slot
 left unbound) or cancel. No `address` → the slot is just created empty, to
@@ -736,6 +740,7 @@ class KapNode(KNode):
 | `<handle>.<widget>(...)` | Create a CHILD widget inside a container-like handle; returns the child's own handle. |
 | `<handle>[i]` | One column of a `columns` handle (also `len()` / iteration). |
 | `self.ui.clear()` | Wipe everything this node put in the container. |
+| `self.ui.load_layout(path=None, handlers=None)` | Show a page designed visually (`kpl kwui design <node_type>`, see 7.5) and return `{widget id: handle}`; handler names in the layout call methods of this node. |
 | `self.ui.interact(timeout=None)` | Block until `end()` is called; returns exactly the `msg` it was given, unchanged (`None` on timeout). |
 | `self.ui.end(msg)` | Releases `interact()`, which returns `msg`. `OKAY` (success) / `ERROR` (fail the node even on exit 0 — the step icon shows an error and the workflow STOPS and waits) / `ERROR_SKIP` (the step icon shows an error but the workflow CONTINUES with the next step; the node counts as done, so outputs it saved stay usable and it is not re-run) / `REPEAT` (re-execute the node) are matched case-insensitively; any other message (str, dict, number...) counts as success and is just data for `interact()`'s caller. |
 | `self.ui.end("JUMP", "node")` / `self.ui.jump_to("node")` | Finish this node and continue the workflow at `node` — earlier (redo from there) or later (skip ahead). See 7.3. `end("JUMP")` without a target is just a data message. |
@@ -856,3 +861,51 @@ prints a hint — a refresh is a browser reload now.)
   `kpl run --kwui` returns on CTRL+C. A run left open therefore keeps port 8701:
   the next run warns and moves to 8702, so always open the freshly printed URL
   instead of an old tab.
+
+### 7.5 Designing a node's page visually (kwebui edit mode)
+
+Instead of writing `self.ui.text(...)`, `self.ui.button(...)` ... in code, a node's page can be
+**laid out in the browser** and loaded by the node. Needs `kwebui >= 1.0.0` (`kpipeliner[kwui]`).
+
+```bash
+kpl kwui design <node_type>                 # edits <node dir>/ui.layout.json
+kpl kwui design --layout path/to/x.json     # any other layout file (created on the first change)
+```
+
+The editor opens in the browser (`--host/--port/--no-browser` like `--kwui-*`; defaults from
+`config.yaml`'s `kwui:` section). Right-click inside a container to insert a widget, click a widget
+to edit its properties, drag to move/reorder, drag the gap between columns to resize. Every change
+is saved to the file at once. In the **GUI**, right-click a `UI` node → **Edit UI** opens the same
+editor in a new tab (only offered when the server's Python environment has a kwebui with edit mode).
+
+In the editor, give each widget the **id** your code will use, and for callbacks type a **method
+name** in the "Handlers" field (e.g. `on_click` → `on_save`). In the node:
+
+```python
+class KapNode(KNode):
+    def run(self):
+        self.page = self.ui.load_layout()             # <node dir>/ui.layout.json (a relative path is relative to the node dir)
+        self.page["title"].update(text=f"Camera {self.inputs['cam'].value}")
+        self.page["cols"][1].text("added to the second column")   # columns by position (or by their own layout ids)
+        self.ui.interact()
+
+    def on_save(self):                                 # named in the layout's Handlers field
+        self.page["status"].update(text="saved")
+        self.ui.end("OKAY")
+```
+
+Rules:
+- `load_layout(path=None, handlers=None)`: the returned dict maps each layout id to the same handle
+  `self.ui.<widget>(...)` returns (`update`, `set_text`, child widgets, ...). `handlers=` is the object whose
+  methods the Handlers field names (default: the node). Plain `self.ui.<widget>(...)` calls may follow; they land below the layout.
+- Strict, like kwebui: a missing file, a widget type kwebui doesn't know, or a handler name the node
+  doesn't have raises when `load_layout` runs — in a plain `kpl run` too, not only in kwui mode.
+- Every load gets its own widget-id prefix inside the browser, so two nodes (or two runs on history
+  pages) may use the same ids. Your code keeps using the ids from the editor.
+- The layout's **page settings** (width, theme) only matter while designing: at run time the workflow
+  page (`workflow.py`) owns them.
+- Without a live UI (plain `kpl run`) `load_layout` — and every widget call — returns no-op handles
+  (`update(...)`, `cols[0].text(...)` work and do nothing), so the same node.py works in both modes.
+- The designed page is for the node's own page; the workflow page (sidebar, tracker, buttons) stays `workflow.py`.
+- kwebui 1.0 serves ONE browser tab at a time: opening the page in a second tab hands the session to that tab
+  and the first shows "superseded" with a Reload button (this also applies to `kpl run --kwui` over the LAN).
