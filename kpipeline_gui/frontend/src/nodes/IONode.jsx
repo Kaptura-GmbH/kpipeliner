@@ -59,7 +59,7 @@ const IONode = memo(function IONode({ id, data, selected }) {
 
   return (
     <div
-      className={`io-node ${data.is_kwui ? 'io-node-kwui' : ''} ${selected ? 'io-node-selected' : ''} ${data.extRunning ? 'io-node-ext-running' : ''} ${data.underlyingActiveColor ? 'io-node-ul-active' : ''}`}
+      className={`io-node ${data.is_kwui ? 'io-node-kwui' : ''} ${selected ? 'io-node-selected' : ''} ${data.extRunning ? 'io-node-ext-running' : ''} ${data.underlyingActiveColor ? 'io-node-ul-active' : ''} ${data.ownerHighlight ? 'io-node-owner-highlight' : ''}`}
       style={data.underlyingActiveColor
         ? { borderColor, '--ul-ring': data.underlyingActiveColor, '--ul-glow': data.underlyingActiveColor + '99' }
         : { borderColor }}
@@ -192,11 +192,11 @@ const IONode = memo(function IONode({ id, data, selected }) {
       )}
       {/* A node bound by another node's underlying_nodes slot looks DISABLED
           (hatched, inert — same as a bound group) until it is made active from
-          its owner's chip or by double-clicking it. Click on it selects the
-          owner (GraphPanel.onNodeClick). Look-only: it still runs normally. */}
+          its owner's chip or by double-clicking it. Click on it HIGHLIGHTS the
+          owner without selecting it (GraphPanel.onNodeClick). Look-only: it still runs normally. */}
       {data.underlyingDisabled && (
         <div className="io-disabled-overlay"
-          title="Driven by another node — click: select its owner · double-click: activate" />
+          title="Driven by another node — click: highlight its owner · double-click: activate" />
       )}
 
       {/* Underlying NODES: one chip per BOUND slot (binding happens in the

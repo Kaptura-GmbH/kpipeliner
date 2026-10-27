@@ -313,3 +313,18 @@
   position: relative;
   z-index: 11;
 }
+
+/* The owner of a disabled group / inactive bound node the user just clicked: a
+   look-only highlight (the selection is NOT touched). An outline rather than a
+   box-shadow, so it composes with every box-shadow state above (kwui ring, selection,
+   running glow, active underlying node). */
+.io-node-owner-highlight {
+  outline: 3px solid #f6ad55;
+  outline-offset: 4px;
+  animation: owner-highlight-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes owner-highlight-pulse {
+  0%, 100% { outline-color: rgba(246, 173, 85, 0.55); }
+  50%      { outline-color: rgba(246, 173, 85, 1); }
+}

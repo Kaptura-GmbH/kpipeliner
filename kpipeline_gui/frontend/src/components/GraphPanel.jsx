@@ -24,7 +24,7 @@ const EMPTY_HANDLE_COLORS = {}
 const EMPTY_HANDLE_SET = new Set()
 
 // ── Context menu ───────────────────────────────────────────────────────────
-function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntypes, onClose, onEditUI, onEditUIWithCode, onAddNode, onDeleteNode, onRunNode, onAddGroup, onDuplicateNode, onRemoveFromGroup, onToggleIOFlag }) {
+function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntypes, onClose, onEditUI, onAddNode, onDeleteNode, onRunNode, onAddGroup, onDuplicateNode, onRemoveFromGroup, onToggleIOFlag }) {
   const [expandedCat, setExpandedCat] = useState(null)
   const cats = {}
   ntypes.forEach(nt => {
@@ -43,10 +43,6 @@ function ContextMenu({ x, y, nodeId, ioFlags, frozen, canEditUI, nodeTypes: ntyp
             <div className="ctx-menu-item" onClick={() => { onDuplicateNode(nodeId); onClose() }}>⧉ Duplicate</div>
             {canEditUI && (
               <div className="ctx-menu-item" onClick={() => { onEditUI(nodeId); onClose() }}>✎ Edit UI</div>
-            )}
-            {canEditUI && (
-              <div className="ctx-menu-item" title="Also runs this node, so the UI its code draws is shown (dimmed, not editable)"
-                onClick={() => { onEditUIWithCode(nodeId); onClose() }}>✎ Edit UI + show coded UI (runs node)</div>
             )}
             {ioFlags && (
               <>
@@ -150,6 +146,9 @@ function GraphInner({
   // dragging a connection from a jump-out, the hovered *other* node reveals
   // its jump-in instead. Transient UI state only, never persisted.
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
+  // The node to HIGHLIGHT (not select) after the user clicked a disabled group / inactive bound
+  // node: its owner. Transient view state, never persisted; see onNodeClick.
+  const [ownerHighlightId, setOwnerHighlightId] = useState(null)
   const [jumpDragFrom, setJumpDragFrom] = useState(null)
   const reactFlowWrapper = useRef(null)
   const { project } = useReactFlow()
@@ -287,27 +286,29 @@ function GraphInner({
 
   const onPaneClickWithGroupFocus = useCallback(() => {
     setCtxMenu(null)
+    setOwnerHighlightId(null)
     disableGroupsOutsideScope(null)
   }, [disableGroupsOutsideScope])
 
   const onNodeClick = useCallback((_event, node) => {
-    // Clicking a DISABLED group selects its "parent" (calling) node instead
-    // — the node that bound it via underlying_groups — so the user can find
-    // who owns it. A disabled group's content is otherwise fully inert
-    // (GroupNode.jsx's overlay); this is the one interaction left on it.
+    // Clicking a DISABLED group HIGHLIGHTS its "parent" (calling) node — the node that
+    // bound it via underlying_groups — so the user can find who owns it. A disabled
+    // group's content is otherwise fully inert (GroupNode.jsx's overlay); this is the one
+    // interaction left on it. It must only HIGHLIGHT: selecting the parent moved the
+    // selection away from the group being clicked (it was deselected while the user was
+    // still working on it, e.g. mid double-click), so the selection is left alone.
+    let highlight = null
     if (node.type === 'groupNode' && node.data?.disabled) {
-      const nds = extNodesRef.current
-      const parent = nds.find(n => (n.data?.underlying_groups || []).some(s => s.group_id === node.id))
-      if (parent) {
-        setNodes(prev => prev.map(n => ({ ...n, selected: n.id === parent.id })))
-      }
+      const parent = extNodesRef.current.find(n => (n.data?.underlying_groups || []).some(s => s.group_id === node.id))
+      if (parent) highlight = parent.id
     }
-    // Same for an INACTIVE bound node: it is inert (overlay), and clicking it
-    // selects the node that binds it so the user can find who owns it.
+    // Same for an INACTIVE bound node: it is inert (overlay), and clicking it highlights
+    // the node that binds it.
     if (node.type === 'ioNode' && !node.data?.underlying_active) {
       const owner = findUnderlyingOwner(extNodesRef.current, node.id)
-      if (owner) setNodes(prev => prev.map(n => ({ ...n, selected: n.id === owner.id })))
+      if (owner) highlight = owner.id
     }
+    setOwnerHighlightId(highlight)
     disableGroupsOutsideScope(node.id)
   }, [disableGroupsOutsideScope])
 
@@ -315,20 +316,17 @@ function GraphInner({
   // same effect as selecting it from its owning node's chip list
   // (handleUnderlyingGroupClick above): enabled + highlighted, with any
   // other bound sibling on the SAME node forced off (radio-exclusive).
-  // Deliberately always-enable (not a toggle like the chip click) rather
-  // than reusing handleUnderlyingGroupClick directly: double-clicking a
-  // node that's already selected is where a real browser/ReactFlow quirk
-  // around delegated dblclick dispatch lives (observed empirically — the
-  // native 'dblclick' DOM event fires, but doesn't reliably reach this
-  // handler every time for an already-selected node). An idempotent
-  // "always enable" sidesteps that entirely: if the unreliable case means
-  // this handler sometimes doesn't fire on a repeat double-click, nothing
-  // is wrong, since the group was already in the desired (enabled) state
-  // from the first one. Only applies to a group actually bound as an
-  // underlying_groups slot on some node — a plain, unrelated group has no
-  // sibling list to manage, so this is a no-op for it (GroupNode's title
-  // keeps its own, unrelated double-click meaning — renaming — via its own
-  // stopPropagation).
+  // A double-click only ever ENABLES: it is never a toggle (unlike the chip click), so
+  // double-clicking an already enabled group leaves it enabled, and nothing in this
+  // handler can disable the group it was made on. (An earlier version of this comment
+  // blamed an unexplained "ReactFlow dblclick quirk" for double-clicks that sometimes did
+  // nothing, or switched the group off. The real cause was the node re-sync dropping every
+  // node's measured size, which made React Flow hide ALL nodes for a few frames after each
+  // hover/click, so the second click fell through to the pane — see the setNodes sync in
+  // effect 1, which now keeps the measured width/height.) Only applies to a group actually
+  // bound as an underlying_groups slot on some node — a plain, unrelated group has no
+  // sibling list to manage, so this is a no-op for it (GroupNode's title keeps its own,
+  // unrelated double-click meaning — renaming — via its own stopPropagation).
   const onNodeDoubleClick = useCallback((_event, node) => {
     // An inactive underlying node: activate it (idempotent — setUnderlyingActive
     // does nothing if it already is, so renaming an ACTIVE node by title
@@ -559,6 +557,7 @@ function GraphInner({
           // active bound -> highlight ring in the node's own color.
           underlyingDisabled: ulBound && !ulActive,
           underlyingActiveColor: ulActive ? (n.data?.color || '#a0aec0') : null,
+          ownerHighlight: n.id === ownerHighlightId,
           _showJumpOut: (n.type === 'ioNode' || n.type === 'groupNode') &&
             ((hoveredNodeId === n.id && !jumpDragFrom) || jumpDragFrom === n.id),
           _showJumpIn: (n.type === 'ioNode' || n.type === 'groupNode') &&
@@ -589,8 +588,17 @@ function GraphInner({
     setNodes(prev => {
       const selIds = new Set(prev.filter(n => n.selected).map(n => n.id))
       const prevById = new Map(prev.map(n => [n.id, n]))
-      return mapped.map(n => {
-        const cur = prevById.get(n.id)
+      return mapped.map(raw => {
+        const cur = prevById.get(raw.id)
+        // Keep the size React Flow already MEASURED for this node. `mapped` is rebuilt from
+        // extNodes, which never holds width/height; dropping them here makes React Flow mark
+        // EVERY node `visibility: hidden` until it has measured them again — for a few frames
+        // after every hover/click on a big graph. A click inside that window falls through to
+        // the empty pane: a double-click then never reaches the group, and the pane click
+        // disables every enabled group ("double-click sometimes doesn't enable / disables").
+        const n = (cur && cur.width != null && cur.height != null && raw.width == null && raw.height == null)
+          ? { ...raw, width: cur.width, height: cur.height }
+          : raw
         // Mid-drag, React Flow tracks the live position itself (node.dragging,
         // set by applyNodeChanges) — extNodes still holds the pre-drag position
         // until onNodeDragStop commits it. This effect reruns on every
@@ -618,7 +626,7 @@ function GraphInner({
         return { ...n, selected: selIds.has(n.id) }
       })
     })
-  }, [extNodes, extEdges, nodeStates, externalRunning, handleToggleFold, handleTitleChange, handleGroupResize, hoveredNodeId, jumpDragFrom, selectedEdges, handleHandleClick, handleUnderlyingGroupClick, handleUnderlyingNodeClick]) // eslint-disable-line
+  }, [extNodes, extEdges, nodeStates, externalRunning, handleToggleFold, handleTitleChange, handleGroupResize, hoveredNodeId, jumpDragFrom, ownerHighlightId, selectedEdges, handleHandleClick, handleUnderlyingGroupClick, handleUnderlyingNodeClick]) // eslint-disable-line
 
   // ── Effect 2: EDGE sync ───────────────────────────────────────────────────
   // Runs ONLY when edges or group structure changes — NOT on plain node moves.
@@ -1025,12 +1033,9 @@ function GraphInner({
 
   // Opens the designer in a NEW tab. The tab is opened right away, inside the click — browsers
   // block a window opened after an async request — and pointed at the designer once it is up.
-  const editNodeUI = useCallback((nodeType, nodeId, showCode) => {
-    if (showCode && !window.confirm(
-      `This RUNS the node "${nodeId}" (its real code, hardware included) so the UI it draws in code can be shown next to the layout. `
-      + 'Other nodes are not run. Continue?')) return
+  const editNodeUI = useCallback(nodeType => {
     const tab = window.open('', '_blank')
-    axios.post('/api/kwui/design', { node_type: nodeType, node_id: nodeId, show_code: !!showCode }).then(r => {
+    axios.post('/api/kwui/design', { node_type: nodeType }).then(r => {
       const url = `${window.location.protocol}//${window.location.hostname}:${r.data.port}`
       if (tab) tab.location.href = url
       else window.open(url, '_blank')
@@ -1123,8 +1128,7 @@ function GraphInner({
         <ContextMenu
           x={ctxMenu.x} y={ctxMenu.y} nodeId={ctxMenu.nodeId} ioFlags={ctxMenu.ioFlags} frozen={ctxMenu.frozen ?? null} nodeTypes={ntypes}
           canEditUI={kwuiDesign && !!ctxMenu.isKwui}
-          onEditUI={nid => editNodeUI(ctxMenu.nodeType, nid, false)}
-          onEditUIWithCode={nid => editNodeUI(ctxMenu.nodeType, nid, true)}
+          onEditUI={() => editNodeUI(ctxMenu.nodeType)}
           onToggleIOFlag={onToggleIOFlag}
           onClose={() => setCtxMenu(null)}
           onAddNode={type => onAddNodeAtPosition(type, ctxMenu.flowPos || { x: 200, y: 200 })}

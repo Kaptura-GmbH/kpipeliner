@@ -404,7 +404,7 @@ each node instance binds a slot to a node of the same pipeline through
 one dropdown per slot — filtered to the slot's declared `type`. Like a bound
 group, a bound node **looks disabled** (hatched, inert) until it is made active:
 click its chip under the owner node (one active bound node per owner), or
-double-click it. Clicking an inactive bound node selects its owner. "Active" is a
+double-click it. Clicking an inactive bound node highlights its owner (without selecting it). "Active" is a
 transient focus — clicking the empty canvas or an unrelated node deactivates it —
 and purely visual: it is not saved and does not change how anything runs. The
 binding follows a rename of the bound node and is cleared if that node is
@@ -919,7 +919,6 @@ appear **dimmed and not editable** (kwebui edit mode: only widgets that come fro
 this executes the real node code (hardware included) up to its `interact()`; **no other node is run** — inputs that
 reference other nodes use their cached outputs, else stay unset (a message says so); `load_layout()` calls inside the node are skipped
 (the editor already shows that layout, editable, and the coded widgets are listed above it, not in their real order);
-the node ends when the designer stops. The GUI offers it as a second context-menu entry, **Edit UI + show coded UI (runs node)**,
-with a confirmation; plain **Edit UI** never runs anything.
-- kwebui 1.0 serves ONE browser tab at a time: opening the page in a second tab hands the session to that tab
+the node ends when the designer stops. This is a **CLI-only** option: the GUI's **Edit UI** menu entry never runs a node (a
+GUI entry for it existed briefly and was removed again at the user's request).- kwebui 1.0 serves ONE browser tab at a time: opening the page in a second tab hands the session to that tab
   and the first shows "superseded" with a Reload button (this also applies to `kpl run --kwui` over the LAN).

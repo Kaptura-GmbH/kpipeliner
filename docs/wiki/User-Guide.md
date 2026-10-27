@@ -460,8 +460,9 @@ each one to an actual group in **this** pipeline.
   highlights** the group (so you can see which group is currently "active"
   for that node); clicking it again — or clicking anywhere else on the
   canvas — disables it. Only one bound slot per node can be enabled at a
-  time. A disabled group is shown hatched; clicking a hatched group selects
-  its owning node instead, so you can always find the way back to it.
+  time. A disabled group is shown hatched; clicking a hatched group highlights
+  its owning node (an orange outline; your selection does not move), so you can
+  always find the way back to it. The highlight goes away at the next click elsewhere.
 - **Unbinding**: set the dropdown back to "— none —". If nothing else in the
   pipeline still references that group, it reverts to a perfectly normal,
   unmanaged group — no hatching, no special state.
@@ -1096,12 +1097,11 @@ self.ui.interact()
 
 A callback named in the editor (say `on_save`) simply calls `self.on_save()` of your node. If the file is
 missing, a widget type is unknown or a named method does not exist, the node stops with a clear error.
-**Showing the UI your code draws.** Widgets created in code (`self.ui.text(...)`) only exist while the node runs,
-so a plain editor starts empty. Right-click the node → **Edit UI + show coded UI (runs node)** (or
-`kpl kwui design --show-code --node <name>`) runs that node behind the editor: its coded widgets appear next to
-the layout, dimmed and not editable — only the layout can be edited. **This executes the node's real code**
-(cameras, motors ... up to its `interact()`), which is why the GUI asks first; no other node is run (cached
-outputs are used for inputs). The node stops when you close the designer.
+**Showing the UI your code draws (command line only).** Widgets created in code (`self.ui.text(...)`) only exist while
+the node runs, so the editor starts empty. `kpl kwui design --show-code --node <name>` runs that node behind the editor:
+its coded widgets appear next to the layout, dimmed and not editable — only the layout can be edited. **This executes the
+node's real code** (cameras, motors ... up to its `interact()`); no other node is run (cached outputs are used for
+inputs). The node stops when you close the designer. The GUI's **Edit UI** never does this.
 
 Two nodes may use the same ids; they never mix up clicks. The page width and theme set in the editor
 only apply while designing — the workflow page decides them at run time. The same `node.py` still runs
@@ -1181,7 +1181,7 @@ of the slot's `type`, if it declares one). Each bound slot shows as a small chip
 under the node (`slot → node`, in the bound node's colour).
 
 **Disabled until active — same as a bound group.** A node that is bound to a slot
-looks disabled: hatched, and clicking it selects the node that owns it instead. Make
+looks disabled: hatched, and clicking it highlights the node that owns it (the selection stays where it is). Make
 it active by clicking its chip under the owner (only one bound node per owner can be
 active at a time; click again to switch it off) or by double-clicking the disabled
 node. An active node is shown normally with a highlight ring in its own colour. Active
