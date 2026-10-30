@@ -1,5 +1,6 @@
 # basic nodes dependencies
 plyfile>=1.1.4
+numpy>=1.18.0
 opencv-python-headless>=5.0.0.93
 natsort>=8.4.0
 pillow>=12.3.0

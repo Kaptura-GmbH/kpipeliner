@@ -175,6 +175,16 @@ kpl clean            # clear the cache of all nodes (frozen nodes are skipped)
 kpl clean my_node    # clear the cache of one node
 ```
 
+To clear the cache **and** run in one go, add `--clean` (to `kpl run` or `kpl run_debug`, before the node name):
+
+```bash
+kpl run --clean my_node     # wipe my_node's cache, then run it (its dependencies keep their cache)
+kpl run --clean             # wipe the cache of every node the run executes, then run
+kpl run --clean --no-use-cache my_node   # ...and recompute its dependencies too
+```
+
+Frozen nodes (below) are never wiped by `--clean`, even when named explicitly; `--clean` is not available together with `--kwui`. Without the flag nothing changes.
+
 To protect expensive results (e.g. a long training run) from ever being cleaned, list the node under `frozen_nodes:` in `graph_config.yaml`:
 
 ```yaml
@@ -698,6 +708,7 @@ kpl run my_node_1
 | `kpl tree` | Print the graph with dependencies and inputs/outputs |
 | `kpl status` | Show cached / frozen state per node |
 | `kpl clean [<node>]` | Clear cache (all non-frozen nodes, or one node) |
+| `kpl run --clean [<node>]` / `kpl run_debug --clean [<node>]` | Clear the cache of the node (or of every node the run executes; frozen kept), then run |
 | `kpl node_env install [--node_type T]` | Install node Python environments |
 | `kpl base_node create` | Create a node template in the current directory |
 | `kpl base_node install [--node_name N]` | Install the current directory as a node type |
@@ -871,6 +882,10 @@ and can be overridden per run: `--kwui-host`, `--kwui-port`, `--kwui-no-browser`
 > 8702 — a browser tab left open on 8701 then shows the *old* run and nothing
 > ever happens. kpl prints a warning line in that case; press CTRL+C in the old
 > terminal (or just open the new URL).
+>
+> CTRL+C stops the server, frees the port and also stops a node that is still
+> running (`[kwui] Stopped. Port … is closed.`); the next `kpl run --kwui` gets the
+> same port again right away.
 
 `workflow.py` now belongs to your pipeline and you can restyle it freely. Only two
 things are required of it: a `workflow_tracker` stored as `self.tracker` (its task

@@ -7,8 +7,8 @@ Usage:
     kpl gui
     kpl list
     kpl add <node_type> [<node_id>]
-    kpl run [<node_id>] [--params key=val ...]
-    kpl run_debug [<node_id>] [--params key=val ...]
+    kpl run [--clean] [<node_id>] [--params key=val ...]
+    kpl run_debug [--clean] [<node_id>] [--params key=val ...]
     kpl tree
     kpl status
     kpl clean [<node_id>]
@@ -935,6 +935,43 @@ class Pipeliner:
                 else:
                     print(f"  No cache for '{node.name}'.")
 
+    def clean_before_run(self, node_id=None):
+        """`kpl run --clean`: wipe the cache of what the run is about to execute.
+
+        With a node: only THAT node's cache dir (its dependencies keep theirs;
+        add --no-use-cache to recompute them too). Without one: every node of
+        the run (KGraph.get_run_order — the declared outputs plus their
+        dependencies), the same set a plain `kpl run` executes. Frozen nodes are
+        never wiped, even when named explicitly. Returns False if the run must
+        not start (no config / unknown node), True otherwise.
+        """
+        if not _require_config():
+            return False
+        graph = KGraph(verbose=False)
+        graph.load_externals()
+        graph.load_from_yaml(self.GRAPH_CONFIG)
+
+        if node_id:
+            if not graph.get_node(node_id):
+                print(f"Node '{node_id}' not found in graph.")
+                return False
+            targets = [node_id]
+        else:
+            targets = graph.get_run_order()
+
+        uuid_val = graph.externals.get('uuid', '123456789')
+        cache_root = os.path.join(graph.get_cache_dir(), uuid_val)
+        print(f"Cleaning cache of {len(targets)} node(s) before the run ...")
+        for name in targets:
+            if name in graph.frozen_nodes:
+                print(f"  Skipping frozen node '{name}'.")
+                continue
+            target = os.path.join(cache_root, name)
+            if os.path.exists(target):
+                shutil.rmtree(target)
+                print(f"  Cleaned '{name}'.")
+        return True
+
     # -----------------------------------------------------------------------
     # Groups
     # -----------------------------------------------------------------------
@@ -1492,6 +1529,11 @@ def main():
     p_run.add_argument('--no-parallel', action='store_true')
     p_run.add_argument('--no-use-cache', dest='use_cache', action='store_false',
                        help='Recompute instead of reusing cached node results')
+    p_run.add_argument('--clean', action='store_true',
+                       help='Delete the cache of the node (or, without a node, of every node '
+                            'the run executes; frozen nodes are kept) BEFORE running. '
+                            'Dependencies keep theirs unless --no-use-cache is also given. '
+                            'Must come BEFORE <node_id>.')
     p_run.add_argument('--exit-status', action='store_true',
                        help='Exit with status 1 if the run failed (default: always 0, as '
                             'for every other kpl command). Used by NodeRef.run(). With '
@@ -1511,6 +1553,10 @@ def main():
     p_dbg.add_argument('--no-parallel', action='store_true')
     p_dbg.add_argument('--no-use-cache', dest='use_cache', action='store_false',
                        help='Recompute instead of reusing cached node results')
+    p_dbg.add_argument('--clean', action='store_true',
+                       help='Delete the cache of the node (or, without a node, of every node '
+                            'the run executes; frozen nodes are kept) BEFORE running. '
+                            'Must come BEFORE <node_id>.')
     p_dbg.add_argument('--kwui', action='store_true',
                        help='Run through workflow.py\'s kwebui UI (see: kpl kwui init)')
     _add_kwui_server_args(p_dbg)
@@ -1613,6 +1659,11 @@ def main():
     elif args.command == 'run':
         parallel = not getattr(args, 'no_parallel', False)
         use_cache = getattr(args, 'use_cache', True)
+        if getattr(args, 'clean', False):
+            if getattr(args, 'kwui', False):
+                sys.exit('--clean is not supported with --kwui.')
+            if not p.clean_before_run(args.node_id):
+                sys.exit(1)
         if getattr(args, 'kwui', False):
             p.run_kwui(use_cache=use_cache, debug=False, **_kwui_server_args(args))
         elif args.node_id:
@@ -1631,6 +1682,11 @@ def main():
     elif args.command == 'run_debug':
         parallel = not getattr(args, 'no_parallel', False)
         use_cache = getattr(args, 'use_cache', True)
+        if getattr(args, 'clean', False):
+            if getattr(args, 'kwui', False):
+                sys.exit('--clean is not supported with --kwui.')
+            if not p.clean_before_run(args.node_id):
+                sys.exit(1)
         if getattr(args, 'kwui', False):
             p.run_kwui(use_cache=use_cache, debug=True, **_kwui_server_args(args))
         elif args.node_id:

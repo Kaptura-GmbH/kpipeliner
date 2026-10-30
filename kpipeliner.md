@@ -157,6 +157,7 @@ kpl kwui design <node_type> # design a node's UI page visually (kwebui edit mode
 kpl run --kwui              # run sequentially behind that UI (--kwui-host/--kwui-port)
 kpl run process_1 --params iterations 10   # override an input for this run
 kpl clean [node]            # clear cache (all non-frozen nodes, or one node)
+kpl run --clean [node]      # clear the node's cache (no node: every node of the run; frozen kept), then run; also run_debug. Flag goes BEFORE the node; not with --kwui
 kpl gui                     # web GUI for the current directory (port 8601+)
 ```
 
@@ -860,7 +861,8 @@ prints a hint — a refresh is a browser reload now.)
   server keeps serving after it finishes so the final state stays visible —
   `kpl run --kwui` returns on CTRL+C. A run left open therefore keeps port 8701:
   the next run warns and moves to 8702, so always open the freshly printed URL
-  instead of an old tab.
+  instead of an old tab. CTRL+C frees the port (and stops a still-running node);
+  the next run gets the same port again immediately.
 
 ### 7.5 Designing a node's page visually (kwebui edit mode)
 

@@ -1532,10 +1532,18 @@ def _find_free_port(host, start, tries=100):
     print and open is the one actually served. kwebui re-binds a moment later
     and would drift further if something snatched the port in between — then
     its own "Port X is in use" line is the authority.
+
+    SO_REUSEADDR exactly like kwebui's own bind: after a server is stopped
+    (CTRL+C) its closed connections keep the port in TIME_WAIT for ~60 s, and a
+    plain bind() fails then although nothing listens any more — the next run
+    drifted to 8702 with a false "previous run still running" warning. On
+    Linux a port with a live listener is still refused with it.
     """
     for port in range(start, start + tries):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if os.name != 'nt':   # on Windows it would allow binding a port in use
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((host, port))
             return port
         except OSError:
@@ -1680,11 +1688,20 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
             else:
                 index = restart_at(target, index)
 
+    # The running node (and whatever it started) ends with the UI. on_shutdown runs on
+    # every graceful stop (CTRL+C, SIGTERM, exit()); code after app.run() would not run
+    # on SIGTERM (uvicorn re-raises the signal).
+    app.on_shutdown(bridge.stop_current)
     threading.Thread(target=pipeline, daemon=True).start()
     if open_browser:
         threading.Thread(target=_open_when_ready, args=(app, local_url),
                          daemon=True).start()
-    app.run(host=host, port=port, log_level=log_level)
+    try:
+        app.run(host=host, port=port, log_level=log_level)
+    except KeyboardInterrupt:
+        # CTRL+C: uvicorn has already shut the server down and closed the port;
+        # uvicorn re-raises the signal afterwards — no traceback for a normal stop.
+        print(f'\n[kwui] Stopped. Port {port} is closed.', flush=True)
 
 
 class _AnyHandler:
