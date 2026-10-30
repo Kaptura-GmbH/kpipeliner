@@ -69,6 +69,7 @@ kpl run                  # run it (or: kpl gui to do all of this visually)
 | `kpl init` | Initialize a pipeline in the current directory |
 | `kpl gui` | Launch the web GUI (port 8601+) |
 | `kpl gui --mcp` | GUI + an MCP endpoint at `/mcp`, same port |
+| `kpl gui --port 8701` | GUI on a given port (also `--host`, `--no-browser`) |
 | `kpl mcp` | Headless MCP server only — no GUI/REST API |
 | `kpl list` | List available node types |
 | `kpl add <type> [name]` | Add a node instance to the graph |

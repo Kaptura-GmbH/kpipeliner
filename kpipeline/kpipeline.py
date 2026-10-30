@@ -4,7 +4,7 @@ kpl (kpipeliner) – CLI entry point.
 
 Usage:
     kpl init
-    kpl gui
+    kpl gui [--port N] [--host H] [--no-browser] [--mcp]
     kpl list
     kpl add <node_type> [<node_id>]
     kpl run [--clean] [<node_id>] [--params key=val ...]
@@ -146,7 +146,7 @@ class Pipeliner:
     # GUI
     # -----------------------------------------------------------------------
 
-    def run_gui(self, mcp=False):
+    def run_gui(self, mcp=False, port=None, host=None, open_browser=True):
         gui_server = os.path.join(PIPELINER_DIR, 'kpipeline_gui', 'server.py')
         if not os.path.exists(gui_server):
             print('GUI server not found. Please ensure kpipeline_gui/server.py exists.')
@@ -160,15 +160,28 @@ class Pipeliner:
         cmd = [sys.executable, gui_server, '--workdir', os.getcwd()]
         if mcp:
             cmd.append('--mcp')
+        # Passed on only when given — server.py's own defaults (0.0.0.0, 8601) apply otherwise.
+        if port is not None:
+            cmd += ['--port', str(port)]
+        if host is not None:
+            cmd += ['--host', host]
+        if not open_browser:
+            cmd.append('--no-browser')
 
         print('Launching GUI...')
         proc = subprocess.Popen(cmd)
         try:
             proc.wait()
         except KeyboardInterrupt:
+            # Ctrl+C reached the server too (same process group): let it finish its own
+            # graceful shutdown (closes the port, stops the UI designers it started)
+            # instead of cutting it short with SIGTERM; terminate only if it hangs.
             print('\nShutting down GUI...')
-            proc.terminate()
-            proc.wait()
+            try:
+                proc.wait(timeout=10)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                proc.terminate()
+                proc.wait()
 
     def run_mcp(self):
         """Headless MCP server, no GUI/REST API at all (`kpl mcp`)."""
@@ -1510,6 +1523,11 @@ def main():
     p_gui = sub.add_parser('gui', help='Launch the web GUI')
     p_gui.add_argument('--mcp', action='store_true',
                         help='Also mount an MCP endpoint at /mcp for LLM clients')
+    p_gui.add_argument('--port', type=int, default=None,
+                       help='First port to try (default 8601; the next free one if taken)')
+    p_gui.add_argument('--host', default=None,
+                       help='Bind address (default 0.0.0.0 = also reachable from the LAN)')
+    p_gui.add_argument('--no-browser', action='store_true', help='Do not open a browser tab')
 
     # mcp (headless, no GUI/REST API at all)
     sub.add_parser('mcp', help='Run a headless MCP server for LLM clients (no GUI)')
@@ -1644,7 +1662,8 @@ def main():
         p.init_graph_dir()
 
     elif args.command == 'gui':
-        p.run_gui(mcp=getattr(args, 'mcp', False))
+        p.run_gui(mcp=getattr(args, 'mcp', False), port=args.port, host=args.host,
+                  open_browser=not args.no_browser)
 
     elif args.command == 'mcp':
         if p.run_mcp() is False:

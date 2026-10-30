@@ -694,6 +694,7 @@ kpl run my_node_1
 | `kpl init` | Initialize a pipeline in the current directory |
 | `kpl gui` | Launch the web GUI for the current directory |
 | `kpl gui --mcp` | Launch the GUI with an MCP endpoint also mounted at `/mcp` |
+| `kpl gui --port 8701 [--host H] [--no-browser]` | Launch the GUI on a given port / address, optionally without opening a browser tab |
 | `kpl mcp` | Headless MCP server for the current directory — no GUI/REST API at all, see §7 |
 | `kpl list` | List installed node types by category |
 | `kpl add <type> [<name>]` | Add a node instance to the graph |
@@ -781,7 +782,9 @@ gui:
 python kpipeline_gui/server.py --workdir <pipeline_dir> [--host 0.0.0.0] [--port 8601] [--no-browser]
 ```
 
-`kpl gui` is the normal way to start it; the options above are for running it manually (e.g. headless on a server). If the port is taken, the next free one (8602, 8603, …) is used.
+`kpl gui` is the normal way to start it and takes the same `--port`, `--host` and `--no-browser` options (e.g. `kpl gui --port 8701`). If the port is taken, the next free one (8602, 8603, …) is used.
+
+CTRL+C stops the GUI cleanly and frees the port (`kpipeliner GUI stopped. Port 8601 is closed.`), so the next `kpl gui` gets the same port again right away.
 
 ---
 

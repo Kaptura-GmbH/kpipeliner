@@ -159,6 +159,7 @@ kpl run process_1 --params iterations 10   # override an input for this run
 kpl clean [node]            # clear cache (all non-frozen nodes, or one node)
 kpl run --clean [node]      # clear the node's cache (no node: every node of the run; frozen kept), then run; also run_debug. Flag goes BEFORE the node; not with --kwui
 kpl gui                     # web GUI for the current directory (port 8601+)
+kpl gui --port 8701         # ...on a given port (also --host H, --no-browser); CTRL+C frees the port
 ```
 
 `kpl run` exits non-zero if any node fails; dependents of a failed node are skipped.

@@ -1674,10 +1674,18 @@ def _parse_args():
 
 
 def _find_free_port(host, start, tries=100):
-    """First port at or above `start` that we can bind on `host`."""
+    """First port at or above `start` that we can bind on `host`.
+
+    SO_REUSEADDR like uvicorn's own bind: after a server is stopped (Ctrl+C) its
+    closed connections keep the port in TIME_WAIT for ~60 s, and a plain bind()
+    fails then although nothing listens — the next `kpl gui` drifted to 8602.
+    On Linux a port with a live listener is still refused with it.
+    """
     for port in range(start, start + tries):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if os.name != 'nt':   # on Windows it would allow binding a port in use
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((host, port))
             return port
         except OSError:
@@ -1747,7 +1755,32 @@ def main():
 
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
-    _loop.run_until_complete(server.serve())
+    try:
+        _loop.run_until_complete(server.serve())
+    except KeyboardInterrupt:
+        # Ctrl+C: uvicorn has already shut down gracefully (port closed) and re-raises
+        # the signal afterwards. No traceback for a normal stop.
+        print(f'\nkpipeliner GUI stopped. Port {port} is closed.', flush=True)
+    finally:
+        _close_loop(_loop)
+
+
+def _close_loop(loop):
+    """Close the loop the way asyncio.run() does. Needed because the
+    KeyboardInterrupt above leaves run_until_complete() before the loop ran its
+    pending callbacks — among them anyio's "stop your worker threads" (the threads
+    behind FastAPI's sync endpoints). They are not daemon threads, so the process
+    then hung at exit forever, with the port already closed."""
+    try:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+    finally:
+        loop.close()
 
 
 if __name__ == '__main__':
