@@ -639,7 +639,7 @@ two attributes in `build()`:
 Optional: a class attribute `history` on the `KApp` subclass — `True` (the default
 when it is left out) lets the user click a finished step in the tracker to see what
 that node displayed; `False` shows only the running step, as before. The template
-from `kpl kwui init` also has **Refresh page**, **Restart step**, **Continue** and **Reset all** buttons; see 7.3.
+from `kpl kwui init` also has **Restart step**, **Skip step**, **Refresh page** and **Reset all** buttons (top of the sidebar, compact 2×2 grid); see 7.3.
 
 `load_tasks()` (from `kpipeline.src.kwui`) fills the tracker from the pipeline's
 **jump-link sequence**: it starts at every node listed in `graph_config.yaml`'s
@@ -787,8 +787,9 @@ disk).
 | Button | Effect |
 |---|---|
 | **Refresh page** | Reloads the browser page, exactly like F5. Purely client-side (`onclick="location.reload()"` in an `html` widget): it does not touch the running node, and the page, tracker and history are simply drawn again. |
-| **Restart step** | `restart_step`: stops the running node and runs the CURRENT step again with a freshly built page; earlier steps are untouched. After an error it is the step that failed; after the workflow ended, the last step. |
-| **Continue** | `continue_workflow`: only when the workflow STOPPED because of an error — goes on with the next step; the failed step stays shown as an error and counts as done (a later step reading its outputs does not start it again). Otherwise it does nothing and the terminal says so. |
+| **Restart step** | `restart_step`: stops the running node and runs the CURRENT step again with a freshly built page; earlier steps are untouched. After an error it is the step that failed; after the workflow ended, the last step. If an EARLIER step was clicked in the tracker (to view its output), that step is run again instead — and every step after it (a jump back). The selection lasts until the next step starts; a step that never ran (pending) cannot be selected; a skipped one can. |
+| **Skip step** | `skip_step`: goes on with the NEXT step. While a step runs it is stopped first (everything it started); it stays in the tracker as `error` with the text "skipped", its page stays viewable (click it; it can also be selected for Restart step). A step that still finishes by itself counts as done. After an error it is Continue (the failed step stays `error`). In both cases the step counts as done for the rest of the run (`Pipeliner.accept_failed`): a later step reading its outputs gets whatever it saved and does not start it again. With nothing running and no error it only prints a message. |
+| **Continue** | `continue_workflow`: NOT in the current template (Skip step covers it) but kept for `workflow.py` files from older templates — only when the workflow STOPPED because of an error: goes on with the next step; the failed step stays shown as an error and counts as done. Otherwise it does nothing and the terminal says so. |
 | **Reset all** | `reset_all`: stops the running node and starts the whole workflow over from its first step. |
 
 These functions (all from `kpipeline.src.kwui`) and `jump_to_step("node")` (continue at a

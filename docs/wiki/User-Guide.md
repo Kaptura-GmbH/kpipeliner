@@ -1024,16 +1024,25 @@ can ask to be skipped instead: put `on_error: skip` in its `node_config.yaml` �
 shown on the step ("crashed (exit code N)") and the workflow goes on. An explicit `end("ERROR")`
 still stops it.
 
-**Buttons** in the template's sidebar:
+**Buttons** sit at the top of the template's sidebar, above the step list, in two rows:
+**Restart step** (blue) and **Skip step** (orange), then **Refresh page** (white) and
+**Reset all** (red).
 
-- **Refresh page** — reloads the page in your browser, exactly like pressing F5. It
-  does not touch the running node; use it if the page looks out of date.
 - **Restart step** — stops the step that is running (and anything it started) and runs it
   again with a fresh page. Earlier steps are not touched. After an error it retries the step
-  that failed.
-- **Continue** — only available when the workflow stopped because of an error: goes on with
-  the next step. The step that failed stays marked as an error, and later steps can still use
-  whatever it saved.
+  that failed. If you clicked an earlier step in the tracker to look at its output, Restart
+  step runs **that** step again instead — and the steps after it, since they may depend on it.
+  (Clicking a step only selects it until the next step starts.)
+- **Skip step** — goes on with the next step. If a step is running, it is stopped first (and
+  anything it started). The stopped step stays in the tracker, marked as an error with
+  "skipped" under it, and you can still click it to see what it showed before it was
+  stopped. If the step finishes by itself while being stopped, it simply counts as done.
+  After an error, Skip step carries on past the failed step (the step stays marked as an
+  error). Either way the step counts as done for the rest of the run: a later step that
+  reads its output uses whatever it saved (it is not started again). With nothing running
+  and no error, Skip step does nothing.
+- **Refresh page** — reloads the page in your browser, exactly like pressing F5. It
+  does not touch the running node; use it if the page looks out of date.
 - **Reset all** — stops whatever is running (every node, including helper nodes
   without a UI, and anything they started) and starts the whole workflow over from the
   first step.
@@ -1043,6 +1052,12 @@ off by Reset all, like with CTRL+C. If a step that already finished left a helpe
 program running, it is stopped as soon as that step runs again (Reset all, or a jump
 back), so you never end up with two copies. When the workflow has finished or stopped on an
 error, the page stays open and Reset all starts it again.
+
+A `workflow.py` created with an older template keeps working unchanged (including its
+**Continue** button, which still does what it always did). To get the new sidebar, move
+the old file away and re-create it with `kpl kwui init` (then copy over any changes you
+made), or add `skip_step` to its `from kpipeline.src.kwui import ...` line and a
+`sidebar.button("Skip step", on_click=skip_step)`.
 
 **Sending the workflow to another step from node code.** A node can finish and send
 the workflow to any other node of the sequence:

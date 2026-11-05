@@ -696,7 +696,9 @@ def reset_all(*_args):
 
 def restart_step(*_args):
     """Run the current step again: stops it if it is running (everything it started),
-    and rebuilds its page. After a failure it is the step that failed."""
+    and rebuilds its page. After a failure it is the step that failed. If an earlier
+    step was clicked in the tracker (to look at its output), THAT step is run again —
+    and the steps after it, as with any jump back."""
     bridge = get_active_bridge()
     if bridge is not None:
         bridge.restart_current()
@@ -708,6 +710,16 @@ def continue_workflow(*_args):
     bridge = get_active_bridge()
     if bridge is not None:
         bridge.continue_after_error()
+
+
+def skip_step(*_args):
+    """Go on with the next step. While a step runs: stop it (and everything it
+    started) first; it stays in the tracker, marked 'skipped'. After an error: carry on
+    past the failed step (what `continue_workflow` does — the template has only this
+    one button for both)."""
+    bridge = get_active_bridge()
+    if bridge is not None:
+        bridge.skip_current()
 
 
 def refresh_step(*_args):
@@ -775,6 +787,9 @@ JUMP_STOP_GRACE = 5.0
 
 #: Pseudo jump target meaning "go on with the step after the one that failed".
 CONTINUE = '__continue__'
+
+#: Pseudo jump target meaning "stop the running step and go on with the next one".
+SKIP = '__skip__'
 
 #: Page key shared by every node that is not a tracker step (data dependencies
 #: pulled in implicitly) — there is no step to click to reach their page.
@@ -863,6 +878,8 @@ class KwuiBridge:
         self._skipped_log = []        # steps that ended with a skipped error (for the end-of-run note)
         self._token_nodes = {}   # run token -> node name, for every node run of this session
         self._stopper = None
+        self._in_step = False         # a step is being run right now (see begin_step/end_step)
+        self._selected = None         # earlier step clicked in the tracker (Restart step runs it)
         self.sequence = []
         self.current_step = None
         # Designer preview (run_design): the editor mounts the layout itself, so a node's
@@ -909,6 +926,7 @@ class KwuiBridge:
         if not self._history:
             return
         key = node_name if node_name in self._step_ids else BACKGROUND_PAGE
+        self._selected = None   # the view goes back to the running node
         page = self._pages.get(key)
         if page is None:
             page = self._pages[key] = self.container.container(border=False)
@@ -925,6 +943,7 @@ class KwuiBridge:
     def _on_step_select(self, task_id):
         if self._status.get(task_id) in _VIEWABLE and task_id in self._pages:
             self._show_page(task_id)
+            self._selected = task_id
 
     def _freeze(self, node_name):
         if not self._history:
@@ -1025,10 +1044,44 @@ class KwuiBridge:
         self._details.setdefault(node_name, why)
 
     def restart_current(self):
-        """Run the current step again (stopping it first if it is running)."""
+        """Run the current step again (stopping it first if it is running) — or the
+        earlier step the user clicked in the tracker to look at, and from there on."""
+        selected, self._selected = self._selected, None
+        if selected in self.sequence and selected != self.current_step:
+            print(f"[kwui] Restarting at the selected step '{selected}'.", flush=True)
+            self.request_jump(selected, 'user')
+            return
         step = self.current_step or (self.sequence[0] if self.sequence else None)
         if step:
             self.request_jump(step, 'user')
+
+    def skip_current(self):
+        """Stop the running step and go on with the next one. After an error the
+        workflow is idle: then it is Continue. Returns False (with a message) when no
+        step is running."""
+        with self._cond:
+            stopped_on, in_step = self._stopped_on, self._in_step
+        if stopped_on is not None:
+            return self.continue_after_error()
+        if not in_step:
+            print('[kwui] "Skip step" only applies while a step is running — nothing to skip.',
+                  flush=True)
+            return False
+        with self._cond:
+            self._pending = (SKIP, 'user', False)
+            proc, token = self._proc, self._proc_token
+            self._cond.notify_all()
+        if proc is not None:
+            self._stopper = threading.Thread(target=self.stop_run, args=(proc, token), daemon=True)
+            self._stopper.start()
+        return True
+
+    def mark_step_skipped(self, name):
+        """Step `name` was stopped by Skip: it stays in the tracker — shown as an error
+        (it did not finish) with 'skipped' under it — and its page (what it showed until
+        it was stopped) can still be opened by clicking it."""
+        self._set_step(name, 'error', 'skipped')
+        print(f"[kwui] Step '{name}' skipped.", flush=True)
 
     def set_stopped_on(self, node_name):
         with self._cond:
@@ -1061,6 +1114,11 @@ class KwuiBridge:
     def begin_step(self, name):
         with self._cond:
             self.current_step = name
+            self._in_step = True
+
+    def end_step(self):
+        with self._cond:
+            self._in_step = False
 
     def request_jump(self, target, origin):
         """Ask the run loop to continue at `target` (a node of the sequence).
@@ -1649,7 +1707,7 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
             while index < len(sequence):
                 # A Reset that arrived between two steps.
                 early = bridge.take_jump(True)
-                if early == CONTINUE:      # a stale Continue (the workflow is running): nothing to do
+                if early in (CONTINUE, SKIP):   # stale (arrived after its step ended): nothing to do
                     early = None
                 if early is not None:
                     index = restart_at(early, index)
@@ -1659,8 +1717,20 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
                 ok = run_one(name)
                 # end('JUMP', ...) from the node, or a Reset that stopped it.
                 target = bridge.take_jump(ok)
+                bridge.end_step()
                 if target == CONTINUE:
                     target = None
+                if target == SKIP:
+                    bridge.await_stopped()
+                    if not ok:   # stopped by Skip (one that still finished by itself counts as done)
+                        # Exactly like Continue after an error: the step counts as done for
+                        # the rest of the run (a later step reading its outputs does not
+                        # start it again) and it stays in the tracker with its page.
+                        if accept is not None:
+                            accept(name)
+                        bridge.mark_step_skipped(name)
+                    index += 1
+                    continue
                 if target is not None:
                     index = restart_at(target, index)
                     continue
@@ -1679,6 +1749,8 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
             # again, and Continue goes on past a step that stopped the workflow.
             bridge.set_stopped_on(failed)
             target = bridge.wait_for_jump()
+            while target == SKIP:   # a Skip that arrived just after the last step ended
+                target = bridge.wait_for_jump()
             bridge.set_stopped_on(None)
             if target == CONTINUE and failed is not None:
                 if accept is not None:
