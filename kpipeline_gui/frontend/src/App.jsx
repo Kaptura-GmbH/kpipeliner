@@ -307,7 +307,12 @@ export default function App() {
         setNodes(nds)
         setEdges(eds)
       }
-    }).catch(() => {})
+    }).catch(err => {
+      // The server refuses a graph_config.yaml whose node/group names are not
+      // \w+ (400 with a message) — say so instead of showing an empty canvas.
+      const msg = err?.response?.data?.msg
+      if (msg) window.alert(`Cannot load graph_config.yaml:\n${msg}`)
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -316,7 +321,10 @@ export default function App() {
   const saveGraph = useCallback((nds, eds) => {
     clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      axios.post(`${API}/graph`, { nodes: nds, edges: eds }).catch(() => {})
+      axios.post(`${API}/graph`, { nodes: nds, edges: eds }).catch(err => {
+        const msg = err?.response?.data?.msg
+        if (msg) window.alert(`Graph NOT saved:\n${msg}`)
+      })
     }, 500)
   }, [])
 
@@ -897,7 +905,9 @@ export default function App() {
   function createNodeAndGroups(nt, pos, resolved, skipped) {
     const type = nt.type
     const count = nodes.filter(n => n.data?.node_type === type).length
-    const id = `${type}_${count + 1}`
+    // Ids must be \w+ (the server refuses anything else): a type directory
+    // named with other characters still yields a valid id.
+    const id = `${type}_${count + 1}`.replace(/\W/g, '_')
     const taken = new Set(nodes.map(n => n.id))
     taken.add(id)
 

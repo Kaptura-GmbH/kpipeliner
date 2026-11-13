@@ -28,7 +28,10 @@ If it is missing, stop and tell the user to install kpipeliner first.
   `cache/<uuid>/<node_name>/outputs.yaml` via `self.save_output()`. Downstream
   inputs are resolved from that file. Runs reuse cached results by default.
 - **Names must match `\w+`** (letters, digits, underscore) — node names, input
-  names, output names. Anything else breaks reference parsing.
+  names, output names. Anything else breaks reference parsing. Node names and
+  group ids are enforced: `kpl` refuses to load a `graph_config.yaml` with any
+  other name (`Error: Invalid node name ...`, exit 1), and `kpl add`, `kpl clean`
+  and the GUI server reject such names too.
 
 ---
 

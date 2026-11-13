@@ -951,8 +951,21 @@ function GraphInner({
             idSet.has(s.node_id) ? { ...s, node_id: null } : s) } }
         : n
     )
+    // A remaining node's input that referenced a deleted node (`nodes.<id>.<out>`)
+    // is cleared, exactly as onEdgesDelete does for a removed wire. The wire goes
+    // away with the node, but the reference string in input_values is what the
+    // server writes to graph_config.yaml — left alone it would be saved pointing
+    // at a node that no longer exists.
+    const refOf = v => (typeof v === 'string' && REF_RE.test(v)) ? v.split('.')[1] : null
+    const dropRefs = n => {
+      const iv = n.data?.input_values
+      if (!iv || !Object.values(iv).some(v => idSet.has(refOf(v)))) return n
+      const vals = {}
+      for (const [k, v] of Object.entries(iv)) vals[k] = idSet.has(refOf(v)) ? null : v
+      return { ...n, data: { ...n.data, input_values: vals } }
+    }
     onGraphChange(
-      nds.filter(n => !idSet.has(n.id)).map(dropBindings),
+      nds.filter(n => !idSet.has(n.id)).map(dropBindings).map(dropRefs),
       eds.filter(e => !idSet.has(e.source) && !idSet.has(e.target))
     )
     idSet.forEach(nid => onDeleteNode?.(nid))

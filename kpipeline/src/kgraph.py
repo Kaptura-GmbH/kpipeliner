@@ -10,6 +10,30 @@ from kpipeline.src.kbase_nodes import (
 from kpipeline.src.kpaths import resolve_configured_dir
 
 
+#: Node and group names: the same character set the `nodes.<name>.<output>`
+#: reference pattern matches. A name is also a cache directory (cache/<uuid>/
+#: <name>) and part of the node's command line, so nothing else is accepted.
+NAME_RE = re.compile(r'^\w+$')
+
+
+class InvalidNameError(ValueError):
+    """A node or group name that is not `\\w+` (raised on load / add / clean)."""
+
+
+def is_valid_name(name):
+    return isinstance(name, str) and NAME_RE.fullmatch(name) is not None
+
+
+def check_name(name, what='node', where=None):
+    """Raise InvalidNameError unless `name` is a valid node/group name."""
+    if not is_valid_name(name):
+        hint = f' in {where}' if where else ''
+        raise InvalidNameError(
+            f"Invalid {what} name {name!r}{hint}: only letters, digits and '_' are "
+            f"allowed (no spaces, '-', '.', '/' or other characters).")
+    return name
+
+
 class KGraph:
     def __init__(self, verbose=False):
         self.nodes = []
@@ -144,6 +168,14 @@ class KGraph:
         self.log_enabled = bool(cfg.get('log_enabled', True))
         self.input_nodes = cfg.get('inputs', []) or []
         self.output_nodes = cfg.get('outputs', []) or []
+
+        # Refuse the file outright when a name is not \w+: such a name would end
+        # up in a shell command (KNode.execute) and in a cache path (rmtree on
+        # clean), and no reference could ever point at it anyway.
+        for node_cfg in cfg.get('nodes', []) or []:
+            check_name(node_cfg.get('name', node_cfg.get('type', 'NONE')), 'node', yaml_path)
+        for grp in cfg.get('groups', []) or []:
+            check_name(grp.get('id'), 'group', yaml_path)
 
         installed = scan_base_nodes(self.get_base_nodes_dirs())
         self.missing_nodes = []

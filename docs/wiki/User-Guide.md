@@ -327,7 +327,7 @@ A pipeline can declare which of its nodes are its **inputs** (where data enters)
 | Action | How |
 |---|---|
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
-| Delete node or wire | select it, press `Delete` |
+| Delete node or wire | select it, press `Delete`. Deleting a node also clears every input of the remaining nodes that referenced it (`nodes.<name>.<output>`), so `graph_config.yaml` never keeps a reference to a node that no longer exists |
 | Duplicate node | right-click node → *⧉ Duplicate* |
 | Run one node | right-click node → *▶ Run this node* |
 | Freeze / unfreeze a node's cache | right-click node → *🔒/🔓 Freeze/Unfreeze cache*, or the button in the Properties panel |
@@ -717,6 +717,12 @@ kpl run my_node_1
 | `kpl uninstall` | Remove kpl from your PATH |
 
 ### `graph_config.yaml` (per pipeline)
+
+Node names and group ids must consist of letters, digits and `_` only (`\w+`): a name is
+also the node's cache directory and part of its command line, and `nodes.<name>.<output>`
+references can only point at such names. The GUI generates and sanitizes names itself;
+`kpl add`, `kpl clean`, the GUI's cache actions and the loading of this file refuse any other
+name with an error (`Invalid node name ...`) — rename the node in the file to fix it.
 
 ```yaml
 name: "my_pipeline"

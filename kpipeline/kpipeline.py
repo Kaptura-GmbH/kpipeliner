@@ -41,6 +41,7 @@ if __name__ == '__main__' and not __package__:
 import yaml
 
 from kpipeline import KNode, KGraph, KParameter, NodeState, PipelineExecutor
+from kpipeline.src.kgraph import InvalidNameError, is_valid_name
 from kpipeline.src.kbase_nodes import (
     get_default_base_nodes_dir, scan_base_nodes, find_node_dir,
 )
@@ -257,6 +258,10 @@ class Pipeliner:
         if not node_id:
             count = graph.count_nodes(node_type=node_type)
             node_id = f'{node_type}_{count + 1}'
+
+        if not is_valid_name(node_id):
+            print(f"Invalid node name '{node_id}': only letters, digits and '_' are allowed.")
+            return False
 
         if graph.get_node(node_id):
             print(f"Node '{node_id}' already exists.")
@@ -922,6 +927,11 @@ class Pipeliner:
     def clean_cache(self, node_id=None):
         if not _require_config():
             return False
+        # The name becomes a path under cache/<uuid>/ that is rmtree'd — never
+        # accept anything that could leave that directory.
+        if node_id and not is_valid_name(node_id):
+            print(f"Invalid node name '{node_id}': only letters, digits and '_' are allowed.")
+            return False
         graph = KGraph(verbose=False)
         graph.load_externals()
         graph.load_from_yaml(self.GRAPH_CONFIG)
@@ -1508,6 +1518,15 @@ def show_config():
 
 
 def main():
+    """Console entry point: `_main` plus one-line errors for a graph_config.yaml
+    that names a node/group with characters other than \\w (no traceback)."""
+    try:
+        _main()
+    except InvalidNameError as exc:
+        sys.exit(f'Error: {exc}')
+
+
+def _main():
     _ensure_kpl_on_path()
     ensure_user_config()
     parser = argparse.ArgumentParser(

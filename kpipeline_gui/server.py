@@ -48,6 +48,7 @@ FRONTEND_DIST = os.path.join(GUI_DIR, 'frontend', 'dist')
 sys.path.insert(0, PIPELINER_DIR)
 
 from kpipeline import KGraph  # noqa: E402
+from kpipeline.src.kgraph import is_valid_name  # noqa: E402
 from kpipeline.src.kbase_nodes import (  # noqa: E402
     get_group_base_nodes_dir, resolve_base_nodes_dirs, resolve_groups_dir,
     resolve_groups_dirs, scan_base_nodes,
@@ -452,6 +453,16 @@ def _list_group_components() -> list[dict]:
     return comps
 
 
+def _name_error(name, what='node'):
+    """400 response when `name` is not a valid node/group name (\\w+), else None.
+    Names reach a shell command line (KNode.execute) and cache paths that are
+    rmtree'd, so every endpoint that takes one from the client checks it first."""
+    if is_valid_name(name):
+        return None
+    return JSONResponse({'ok': False, 'msg': f"Invalid {what} name {name!r}: only letters, "
+                                             f"digits and '_' are allowed."}, status_code=400)
+
+
 @app.get('/api/nodes')
 def get_nodes():
     graph = KGraph(verbose=False)
@@ -472,6 +483,18 @@ def get_graph():
         return JSONResponse({'nodes': [], 'edges': [], 'missing': []})
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f) or {}
+
+    # A file with a non-\w name is refused here (with the message the GUI shows)
+    # rather than drawn: a later save would be rejected anyway, and running it
+    # would put the name into a shell command.
+    for n in cfg.get('nodes', []) or []:
+        err = _name_error(n.get('name', n.get('type')), 'node')
+        if err is not None:
+            return err
+    for g in cfg.get('groups', []) or []:
+        err = _name_error(g.get('id'), 'group')
+        if err is not None:
+            return err
 
     nodes = []
     edges = []
@@ -961,8 +984,24 @@ async def save_graph(request_data: dict):
     else:
         cfg = {'name': 'graph', 'description': '', 'author': '', 'date': '', 'version': '1.0'}
 
+    # Every id (node or group) must be \w+ — the frontend already sanitizes, so a
+    # bad id here is a foreign client; refuse the whole save, write nothing.
+    for n in rf_nodes:
+        err = _name_error(n.get('id'), 'group' if n.get('type') == 'groupNode' else 'node')
+        if err is not None:
+            return err
+
     cfg_nodes = []
     cfg_groups = []
+    # Node ids being saved: a typed-in `nodes.X.Y` input value whose X is not
+    # among them (X was deleted, or the file already carried a stale reference)
+    # is dropped instead of written — it would point at nothing.
+    saved_ids = {n['id'] for n in rf_nodes if n.get('type') != 'groupNode'}
+    ref_re = re.compile(r'^nodes\.(\w+)\.(\w+)$')
+
+    def _dangling(value):
+        m = ref_re.match(value) if isinstance(value, str) else None
+        return bool(m) and m.group(1) not in saved_ids
 
     for n in rf_nodes:
         nid = n['id']
@@ -1008,7 +1047,8 @@ async def save_graph(request_data: dict):
                     # Connected to a group port whose chain is not fed yet —
                     # store no value (a stale input_values ref must not win).
                     inputs.append({'name': inp})
-            elif inp in input_values and input_values[inp] is not None:
+            elif (inp in input_values and input_values[inp] is not None
+                    and not _dangling(input_values[inp])):
                 inputs.append({'name': inp, 'value': input_values[inp]})
             else:
                 inputs.append({'name': inp})
@@ -1240,6 +1280,10 @@ async def run_group(request_data: dict):
     group_id = request_data.get('group_id')
     if not group_id:
         return JSONResponse({'ok': False, 'msg': 'group_id required'}, status_code=400)
+    # `kpl group run` also accepts a group's LABEL (free text), so no \w+ check —
+    # but it goes into kpl's argv, so it must not look like an option.
+    if str(group_id).startswith('-'):
+        return JSONResponse({'ok': False, 'msg': f'Invalid group id {group_id!r}.'}, status_code=400)
     cmd = _kpl_cmd() + ['group', 'run', str(group_id)]
     threading.Thread(target=_run_pipeline, args=(cmd, _workdir), daemon=True).start()
     return JSONResponse({'ok': True})
@@ -1250,6 +1294,11 @@ async def run_pipeline(request_data: dict):
     node_id = request_data.get('node_id')
     debug = request_data.get('debug', False)
     clear_cache = request_data.get('clear_cache', False)
+
+    if node_id:
+        err = _name_error(node_id)   # goes into `kpl clean <id>` (rmtree) and `kpl run <id>`
+        if err is not None:
+            return err
 
     kpipeliner_cmd = kpl_command()
 
@@ -1396,6 +1445,9 @@ def _cache_uuid() -> str:
 def node_cache_status(node_id: str):
     """Whether a node has cached data — the GUI only asks the clear-cache
     question when there is actually something to clear."""
+    err = _name_error(node_id)
+    if err is not None:
+        return err
     target = os.path.join(_cache_root(), _cache_uuid(), node_id)
     return JSONResponse({'cached': os.path.exists(target)})
 
@@ -1404,7 +1456,10 @@ def node_cache_status(node_id: str):
 def node_outputs(node_id: str):
     """The node's cached outputs.yaml (cache/<uuid>/<node_id>/outputs.yaml), if any —
     lets the Properties panel show output values without a re-run."""
-    safe = os.path.basename(node_id)  # no path traversal
+    err = _name_error(node_id)
+    if err is not None:
+        return err
+    safe = node_id
     outputs_yaml = os.path.join(_cache_root(), _cache_uuid(), safe, 'outputs.yaml')
     if not os.path.exists(outputs_yaml):
         return JSONResponse({'cached': False, 'outputs': None})
@@ -1421,7 +1476,10 @@ def remove_node_cache(node_id: str):
     """Remove a node's cache directory (cache/<uuid>/<node_id>)."""
     import shutil as _shutil
 
-    safe = os.path.basename(node_id)  # no path traversal
+    err = _name_error(node_id)   # basename() alone let '..' / '.' through
+    if err is not None:
+        return err
+    safe = node_id
     target = os.path.join(_cache_root(), _cache_uuid(), safe)
     if not os.path.isdir(target):
         return JSONResponse({'ok': False, 'msg': f"No cache for '{safe}'."}, status_code=404)
@@ -1442,7 +1500,10 @@ def remove_node_caches(body: dict):
     root = os.path.join(_cache_root(), _cache_uuid())
     removed, failed = [], []
     for node_id in body.get('node_ids', []) or []:
-        target = os.path.join(root, os.path.basename(str(node_id)))
+        if not is_valid_name(node_id):   # '..' would wipe the whole cache root
+            failed.append({'node': node_id, 'msg': 'invalid node name'})
+            continue
+        target = os.path.join(root, node_id)
         if not os.path.isdir(target):
             continue
         try:
@@ -1460,7 +1521,10 @@ def download_node_cache(node_id: str):
     import zipfile
     from starlette.background import BackgroundTask
 
-    safe = os.path.basename(node_id)  # no path traversal
+    err = _name_error(node_id)
+    if err is not None:
+        return err
+    safe = node_id
     target = os.path.join(_cache_root(), _cache_uuid(), safe)
     if not os.path.isdir(target):
         return JSONResponse({'ok': False, 'msg': f"No cache for '{safe}'."}, status_code=404)
