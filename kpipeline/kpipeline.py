@@ -42,6 +42,7 @@ import yaml
 
 from kpipeline import KNode, KGraph, KParameter, NodeState, PipelineExecutor
 from kpipeline.src.kgraph import InvalidNameError, is_valid_name
+from kpipeline.src.knode import IGNORE_NODE_ENV_VAR
 from kpipeline.src.kbase_nodes import (
     get_default_base_nodes_dir, scan_base_nodes, find_node_dir,
 )
@@ -1324,6 +1325,89 @@ def _print_mcp_missing():
     print(mcp_install_hint())
 
 
+#: The python the user's shell would start, captured in _main() BEFORE
+#: _ensure_kpl_on_path() prepends kpl's own bin dir (which, in a uv/pip install,
+#: holds kpl's interpreter — looked up afterwards, `python3` would find THAT one).
+_active_python = None
+
+
+def _find_active_python():
+    """First `python3`/`python` on PATH as the shell set it. Not resolved through
+    symlinks: a venv's python IS a symlink, and following it would drop the venv."""
+    names = ('python', 'python3') if os.name == 'nt' else ('python3', 'python')
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+#: Both spellings of the flag (people type the underscore form, like node inputs).
+_IGNORE_ENV_FLAGS = ('--ignore-node-env', '--ignore_node_env')
+
+
+def _take_run_flags_after_node(args):
+    """Everything after the node name is handed to the node as `--input value` pairs
+    (argparse.REMAINDER), and a lone `--flag` without a value was dropped silently —
+    so `kpl run my_node --ignore-node-env` used to run WITHOUT the flag. Pick that
+    flag up from there as well, and warn about anything else that can't be such a
+    pair instead of losing it without a word."""
+    params = list(getattr(args, 'params', None) or [])
+    if any(p in _IGNORE_ENV_FLAGS for p in params):
+        args.ignore_node_env = True
+        params = [p for p in params if p not in _IGNORE_ENV_FLAGS]
+        args.params = params
+    keys = params[0::2]
+    values = params[1::2]
+    misplaced = [k for k in keys if not k.startswith('--')]
+    misplaced += [v for v in values if v.startswith('--')]
+    if len(params) % 2:
+        misplaced.append(params[-1])
+    if misplaced:
+        print(f"Warning: after the node name, kpl reads `--input value` pairs for the node; "
+              f"{', '.join(repr(m) for m in dict.fromkeys(misplaced))} doesn't fit and may be ignored. "
+              f"kpl's own options (--clean, --no-use-cache, --exit-status, ...) go BEFORE "
+              f"the node name.")
+
+
+def _apply_ignore_node_env(args):
+    """`--ignore-node-env`: every node runs with the active python instead of the
+    venv/conda/pixi env its node_config.yaml declares (see KNode._python_prefix).
+
+    Exported as an env var so nodes and the nested `kpl` runs they start (GroupRef/
+    NodeRef) follow it; such a nested kpl finds the var already set and keeps the
+    interpreter its parent chose."""
+    if not getattr(args, 'ignore_node_env', False):
+        return
+    python = os.environ.get(IGNORE_NODE_ENV_VAR) or _active_python
+    if not python:
+        sys.exit('--ignore-node-env: no python3/python found on PATH.')
+    os.environ[IGNORE_NODE_ENV_VAR] = python
+    # Every node does `from kpipeline import KNode` (needs pyyaml): check once that
+    # this interpreter can, so a missing package is one clear warning up front
+    # instead of the same ImportError from every node.
+    from kpipeline.src.kpaths import node_import_path
+    import_path = node_import_path()
+    env = dict(os.environ)
+    if import_path:
+        env['PYTHONPATH'] = import_path + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+    try:
+        probe = subprocess.run(
+            [python, '-c', 'import sys, kpipeline; print(sys.version.split()[0])'],
+            env=env, capture_output=True, text=True, timeout=30)
+        ok, detail = probe.returncode == 0, (probe.stdout or probe.stderr).strip()
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        ok, detail = False, str(exc)
+    if ok:
+        print(f'--ignore-node-env: every node runs with {python} (Python {detail}), '
+              f'not its own environment.')
+    else:
+        last = detail.splitlines()[-1] if detail else 'unknown error'
+        print(f'Warning: --ignore-node-env: {python} cannot import kpipeline ({last}). '
+              f'The nodes will probably fail — install the missing package(s) in that '
+              f'environment (kpipeline needs pyyaml).')
+
+
 def _ensure_kpl_on_path():
     """Nodes — and the nested `kpl` runs of GroupRef/NodeRef — start `kpl` by NAME. For
     a pip/uv-installed kpl that only works if its environment is activated, so put the
@@ -1527,6 +1611,8 @@ def main():
 
 
 def _main():
+    global _active_python
+    _active_python = _find_active_python()   # must come before _ensure_kpl_on_path()
     _ensure_kpl_on_path()
     ensure_user_config()
     parser = argparse.ArgumentParser(
@@ -1582,6 +1668,9 @@ def _main():
     p_run.add_argument('--kwui', action='store_true',
                        help='Run through workflow.py\'s kwebui UI (see: kpl kwui init)')
     _add_kwui_server_args(p_run)
+    p_run.add_argument('--ignore-node-env', '--ignore_node_env', dest='ignore_node_env',
+                       action='store_true',
+                       help='Run every node with the python active in this shell, ignoring the venv/conda/pixi env its node_config.yaml declares')
 
     # run_debug
     p_dbg = sub.add_parser('run_debug', help='Run in debug mode (full log output)')
@@ -1597,6 +1686,9 @@ def _main():
     p_dbg.add_argument('--kwui', action='store_true',
                        help='Run through workflow.py\'s kwebui UI (see: kpl kwui init)')
     _add_kwui_server_args(p_dbg)
+    p_dbg.add_argument('--ignore-node-env', '--ignore_node_env', dest='ignore_node_env',
+                       action='store_true',
+                       help='Run every node with the python active in this shell, ignoring the venv/conda/pixi env its node_config.yaml declares')
 
     # kwui
     p_kwui = sub.add_parser('kwui', help='Manage the kwebui workflow UI')
@@ -1695,6 +1787,8 @@ def _main():
         p.add_node(args.node_type, args.node_id)
 
     elif args.command == 'run':
+        _take_run_flags_after_node(args)
+        _apply_ignore_node_env(args)
         parallel = not getattr(args, 'no_parallel', False)
         use_cache = getattr(args, 'use_cache', True)
         if getattr(args, 'clean', False):
@@ -1718,6 +1812,8 @@ def _main():
             p.run_graph(parallel=parallel, use_cache=use_cache, debug=False)
 
     elif args.command == 'run_debug':
+        _take_run_flags_after_node(args)
+        _apply_ignore_node_env(args)
         parallel = not getattr(args, 'no_parallel', False)
         use_cache = getattr(args, 'use_cache', True)
         if getattr(args, 'clean', False):

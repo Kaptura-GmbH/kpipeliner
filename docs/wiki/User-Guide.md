@@ -201,6 +201,25 @@ kpl node_env install                      # for every node type used in this pip
 kpl node_env install --node_type <type>   # for one specific type
 ```
 
+To skip those environments for a run — for example when the active environment already has
+everything the nodes need, or the node envs aren't installed on this machine — add
+`--ignore-node-env` (or `--ignore_node_env`) to `kpl run` or `kpl run_debug`, also with `--kwui`. Unlike the
+other run options it also works after the node name:
+
+```bash
+conda activate my_env
+kpl run --ignore-node-env               # every node runs with my_env's python
+kpl run_debug --ignore-node-env my_node
+kpl run_debug my_node --ignore_node_env   # same
+kpl run --kwui --ignore-node-env
+```
+
+Every node then runs with the Python your shell would start (`python3`, or `python`, found first
+on `PATH`) instead of the venv/conda/pixi env in its `node_config.yaml`; nodes without an env
+use it too. The run prints which interpreter it uses, and warns up front if that Python can't
+import kpipeliner (it needs `pyyaml`). Nodes that start nested runs (`self.groups[...]`,
+`self.nodes[...]`) pass the choice on. Without the flag nothing changes.
+
 ---
 
 ## 3. The GUI
@@ -710,6 +729,7 @@ kpl run my_node_1
 | `kpl status` | Show cached / frozen state per node |
 | `kpl clean [<node>]` | Clear cache (all non-frozen nodes, or one node) |
 | `kpl run --clean [<node>]` / `kpl run_debug --clean [<node>]` | Clear the cache of the node (or of every node the run executes; frozen kept), then run |
+| `kpl run --ignore-node-env [<node>]` / `kpl run_debug --ignore-node-env [<node>]` | Run every node with the Python active in the shell instead of the env its `node_config.yaml` declares (Step 8); also with `--kwui` |
 | `kpl node_env install [--node_type T]` | Install node Python environments |
 | `kpl base_node create` | Create a node template in the current directory |
 | `kpl base_node install [--node_name N]` | Install the current directory as a node type |

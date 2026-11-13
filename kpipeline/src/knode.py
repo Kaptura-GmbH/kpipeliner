@@ -15,6 +15,10 @@ from datetime import datetime
 
 from kpipeline.src.kparameter import KParameter
 
+#: Set by `kpl run/run_debug --ignore-node-env` to the interpreter every node must
+#: run with (the python active in the user's shell); inherited by nested kpl runs.
+IGNORE_NODE_ENV_VAR = 'KPL_IGNORE_NODE_ENV'
+
 
 class _LineReader:
     """`process.stdout.readline()` for a node of a kwui run.
@@ -858,6 +862,12 @@ class KNode:
         return env_dir
 
     def _python_prefix(self):
+        # `kpl run/run_debug --ignore-node-env`: one interpreter for EVERY node,
+        # whatever env its node_config.yaml declares. An env var (not an attribute)
+        # so the nested `kpl` runs of GroupRef/NodeRef started by a node follow it too.
+        forced = os.environ.get(IGNORE_NODE_ENV_VAR)
+        if forced:
+            return forced
         if not self.env_manager:
             return self._default_python()
         if self.env_manager == 'venv':

@@ -161,6 +161,7 @@ kpl run --kwui              # run sequentially behind that UI (--kwui-host/--kwu
 kpl run process_1 --params iterations 10   # override an input for this run
 kpl clean [node]            # clear cache (all non-frozen nodes, or one node)
 kpl run --clean [node]      # clear the node's cache (no node: every node of the run; frozen kept), then run; also run_debug. Flag goes BEFORE the node; not with --kwui
+kpl run --ignore-node-env [node]  # every node runs with the shell's active python3/python, not its node_config.yaml env; also run_debug and --kwui. Also --ignore_node_env; works before OR after the node
 kpl gui                     # web GUI for the current directory (port 8601+)
 kpl gui --port 8701         # ...on a given port (also --host H, --no-browser); CTRL+C frees the port
 ```
@@ -342,7 +343,8 @@ Alternative — install machine-wide into the default node dir:
 cd my_processor && kpl base_node install
 ```
 
-If the node declares a `python_environment`, install it once:
+If the node declares a `python_environment`, install it once (or skip it for a run with
+`kpl run --ignore-node-env`, which uses the shell's active python for every node):
 
 ```bash
 kpl node_env install --node_type my_processor
