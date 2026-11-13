@@ -1100,6 +1100,20 @@ finish what it is doing; if its process is still running then, it is stopped (to
 with anything it started) so the workflow can move on. (`self.ui.end("JUMP")` without a name is just
 a message, as before.)
 
+**Continuing where you left off.** Every `kpl run --kwui` / `kpl run_debug --kwui` remembers how
+each step ended (in `cache/<uuid>/kwui_progress.json`). When you start the workflow again, the
+tracker immediately shows the steps that are already done — finished, skipped, or passed over
+after an error — and the run **continues at the first unfinished step**: one that never ran,
+failed, or was cut off by CTRL+C. Earlier steps are not run again. Click one of them to select it
+(it shows a short note, since what a node displayed is not kept between runs) and press
+**Restart step** to run it — and the steps after it — again. **Reset all** starts over from the
+first step. To start from the first step right away, run with `--no-use-cache`
+(`kpl run --kwui --no-use-cache`), which also recomputes everything.
+
+A step counts as finished only while its result is still in the cache: after `kpl clean <step>`
+the workflow continues at that step. A pipeline whose workflow was last run before this
+existed has no such record yet; then every step whose result is in the cache counts as finished.
+
 ### 8.5 Good to know
 
 - The same node works in a normal `kpl run`: with no UI attached, `self.ui` quietly

@@ -787,6 +787,15 @@ compute from a re-run step are recomputed too (cached results of nodes that depe
 a re-run step are not reused until they have run again — nothing is deleted from
 disk).
 
+**Resume.** A kwui run records each step's outcome in `cache/<uuid>/kwui_progress.json`
+(`completed` / `passed` = Skip, Continue or ERROR_SKIP / `error` / `running` = cut off). The next
+`kpl run --kwui` shows the leading done steps (completed/passed) in the tracker, does not run them
+again, and continues at the first other step; everything from there on runs again. A `completed`
+record only counts while the step's `outputs.yaml` exists (`kpl clean` = unfinished); no record
+file at all (older kpl) → cached steps count as completed. Restored steps are selectable
+(placeholder page) → "Restart step" re-runs them; Reset all / a restart removes the records of the
+re-run steps. `--no-use-cache` starts at the first step with a fresh record.
+
 **The template's buttons:**
 
 | Button | Effect |

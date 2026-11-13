@@ -457,8 +457,8 @@ class Pipeliner:
             print('Install it with: uv pip install "kpipeliner[kwui]"   '
                   f'(or: {sys.executable} -m pip install "kpipeliner[kwui]")')
             return False
-        from kpipeline.src.kwui import (WORKFLOW_FILE, run_with_ui, tracker_steps,
-                                        workflow_path)
+        from kpipeline.src.kwui import (PROGRESS_FILE, WORKFLOW_FILE, run_with_ui,
+                                        tracker_steps, workflow_path)
 
         if not os.path.exists(workflow_path()):
             print(f'No {WORKFLOW_FILE} in this pipeline. Create it with: kpl kwui init')
@@ -488,6 +488,12 @@ class Pipeliner:
             return self.run_node(name, graph=graph, use_cache=use_cache,
                                  debug=debug, trigger_jump_forward=False)
 
+        # Resume: how far did earlier runs get? --no-use-cache starts from the first
+        # step with a fresh record, exactly like a kwui run always did before.
+        uuid_val = graph.externals.get('uuid', '123456789')
+        progress_path = os.path.join(graph.get_cache_dir(), uuid_val, PROGRESS_FILE)
+        restore = self._kwui_restore(graph, sequence, progress_path) if use_cache else None
+
         server = _kwui_server_defaults()
         run_with_ui(
             run_one, sequence,
@@ -501,8 +507,36 @@ class Pipeliner:
             invalidate=lambda names: self.invalidate_for_rerun(graph, names),
             skip=self.mark_skipped,
             accept=self.accept_failed,
+            progress_path=progress_path,
+            restore=restore,
         )
         return True
+
+    def _kwui_restore(self, graph, sequence, progress_path):
+        """{step: record} of what earlier kwui runs finished (see kwui.PROGRESS_FILE).
+
+        Once a progress file exists it is authoritative: a step without a record is
+        unfinished (a Reset / restart removed it), and a "completed" record only
+        counts while the step's outputs.yaml is still in the cache (`kpl clean`
+        makes it unfinished again). Without any progress file — a pipeline last run
+        by an older kpl — a step whose outputs.yaml exists counts as completed."""
+        from kpipeline.src.kwui import load_progress
+        records, has_file = load_progress(progress_path)
+        restore = {}
+        for name in sequence:
+            node = graph.get_node(name)
+            cached = node is not None and self._has_output_cache(node, graph)
+            rec = records.get(name) if has_file else None
+            if rec:
+                if rec.get('status') == 'completed' and not cached:
+                    continue
+                restore[name] = rec
+            elif not has_file and cached:
+                out = os.path.join(graph.get_cache_dir(), uuid_val_of(graph), name, 'outputs.yaml')
+                restore[name] = {'status': 'completed', 'detail': '',
+                                 'time': time.strftime('%Y-%m-%d %H:%M',
+                                                       time.localtime(os.path.getmtime(out)))}
+        return restore
 
     def accept_failed(self, name):
         """A kwui workflow went on past step `name`, which had failed: for the rest of
@@ -1329,6 +1363,11 @@ def _print_mcp_missing():
 #: _ensure_kpl_on_path() prepends kpl's own bin dir (which, in a uv/pip install,
 #: holds kpl's interpreter — looked up afterwards, `python3` would find THAT one).
 _active_python = None
+
+
+def uuid_val_of(graph):
+    """The pipeline's cache namespace (extern/uuid.yaml), with KGraph's fallback."""
+    return graph.externals.get('uuid', '123456789')
 
 
 def _find_active_python():

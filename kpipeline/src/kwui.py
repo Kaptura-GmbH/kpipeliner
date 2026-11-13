@@ -791,6 +791,41 @@ CONTINUE = '__continue__'
 #: Pseudo jump target meaning "stop the running step and go on with the next one".
 SKIP = '__skip__'
 
+#: Per-pipeline record of how each workflow step ended (cache/<uuid>/kwui_progress.json),
+#: so the next `kpl run --kwui` can show that progress and resume at the first
+#: unfinished step. {step: {"status": completed|passed|error|running, "detail", "time"}}
+#: — "passed" = the workflow went on past it (Skip, Continue, ERROR_SKIP).
+PROGRESS_FILE = 'kwui_progress.json'
+
+#: Step outcomes that count as done when a workflow is resumed.
+PROGRESS_DONE = ('completed', 'passed')
+
+
+def load_progress(path):
+    """(records, file_exists). A missing or unreadable file gives ({}, False/True)."""
+    if not path or not os.path.exists(path):
+        return {}, False
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return (data if isinstance(data, dict) else {}), True
+    except Exception:
+        return {}, True
+
+
+def _save_progress_file(path, records):
+    """Atomic write (temp file + rename): a run killed mid-write never leaves a
+    truncated record behind. Never raises — the UI must not break a run."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(records, f, indent=1)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 #: Page key shared by every node that is not a tracker step (data dependencies
 #: pulled in implicitly) — there is no step to click to reach their page.
 BACKGROUND_PAGE = '__background__'
@@ -880,6 +915,9 @@ class KwuiBridge:
         self._stopper = None
         self._in_step = False         # a step is being run right now (see begin_step/end_step)
         self._selected = None         # earlier step clicked in the tracker (Restart step runs it)
+        self.progress_path = None     # PROGRESS_FILE of this pipeline (None: nothing is recorded)
+        self._progress = {}
+        self._progress_lock = threading.Lock()
         self.sequence = []
         self.current_step = None
         # Designer preview (run_design): the editor mounts the layout itself, so a node's
@@ -957,6 +995,7 @@ class KwuiBridge:
     # -- node lifecycle -----------------------------------------------------
 
     def on_node_state(self, node_name, state):
+        self._note_progress(node_name, state)
         if state == 'RUNNING':
             self._widgets.clear()
             self._fresh = True
@@ -994,6 +1033,62 @@ class KwuiBridge:
                 self._details.pop(node_name, None)
             _stop_activity(self._out)
             self._freeze(node_name)
+
+    # -- progress record (resume) ---------------------------------------------
+
+    def _note_progress(self, node_name, state):
+        if node_name not in self.sequence:
+            return   # a data dependency, not a workflow step
+        if state == 'RUNNING':
+            self._set_progress(node_name, 'running')   # stays so if the run is cut off (CTRL+C)
+        elif state == 'COMPLETED':
+            if node_name in self._error_skipped:
+                self._set_progress(node_name, 'passed', self._details.get(node_name, '') or 'error')
+            else:
+                self._set_progress(node_name, 'completed')
+        elif state == 'FAILED' and not self._user_abort_pending():
+            self._set_progress(node_name, 'error', self._details.get(node_name, ''))
+        # FAILED by a user Reset/jump/Skip: reset_steps / mark_step_skipped decide.
+
+    def _set_progress(self, name, status, detail=''):
+        with self._progress_lock:
+            self._progress[name] = {'status': status, 'detail': detail,
+                                    'time': time.strftime('%Y-%m-%d %H:%M')}
+            self._write_progress()
+
+    def _write_progress(self):
+        if self.progress_path:
+            _save_progress_file(self.progress_path, dict(self._progress))
+
+    def restore_progress(self, records):
+        """Show steps `records` ({name: record}) as they ended in an EARLIER run and
+        start this run's record with them. Each restored tracker step gets a short
+        page of its own — what a node displayed is not kept between runs — which
+        also makes it selectable, so "Restart step" can run it again."""
+        with self._progress_lock:
+            self._progress = {n: dict(r) for n, r in records.items()}
+            self._write_progress()
+        for name, rec in records.items():
+            passed = rec.get('status') == 'passed'
+            detail = rec.get('detail') or ('skipped' if passed else '')
+            self._set_step(name, 'error' if passed else 'completed', detail if passed else '')
+            if not (self._history and name in self._step_ids):
+                continue
+            try:
+                page = self._pages[name] = self.container.container(border=False)
+                when = f" ({rec['time']})" if rec.get('time') else ''
+                what = (f'was passed over in an earlier run{when}: {detail}' if passed
+                        else f'finished in an earlier run{when}')
+                page.text(f"Step '{name}' {what}. What it showed is not kept between runs — "
+                          f'press "Restart step" to run it again.')
+                page.hide()
+            except Exception:
+                self._pages.pop(name, None)
+
+    def show_step_page(self, name):
+        """Show a step's page without selecting it (used when everything was restored)."""
+        if self._history and name in self._pages:
+            self._show_page(name)
 
     def _set_step(self, node_name, status, detail=''):
         """Set a step's status; `detail` is the text under it ('' clears it)."""
@@ -1081,6 +1176,7 @@ class KwuiBridge:
         (it did not finish) with 'skipped' under it — and its page (what it showed until
         it was stopped) can still be opened by clicking it."""
         self._set_step(name, 'error', 'skipped')
+        self._set_progress(name, 'passed', 'skipped')
         print(f"[kwui] Step '{name}' skipped.", flush=True)
 
     def set_stopped_on(self, node_name):
@@ -1105,6 +1201,8 @@ class KwuiBridge:
         """The workflow went on past step `node_name`, which had failed."""
         if node_name not in self._skipped_log:
             self._skipped_log.append(node_name)
+        prev = (self._progress.get(node_name) or {}).get('detail')
+        self._set_progress(node_name, 'passed', prev or 'error')
         print(f"[kwui] Continuing after the error in step '{node_name}'.", flush=True)
 
     def skipped_error_steps(self):
@@ -1193,7 +1291,14 @@ class KwuiBridge:
         return pending[0]
 
     def reset_steps(self, names):
-        """Steps `names` start over: tracker back to pending, pages dropped."""
+        """Steps `names` start over: tracker back to pending, pages dropped, and their
+        progress records removed (they are unfinished again)."""
+        with self._progress_lock:
+            # A list, not any(): any() stops at the first hit and would leave the
+            # records of the remaining steps behind.
+            removed = [n for n in names if self._progress.pop(n, None) is not None]
+            if removed:
+                self._write_progress()
         background = self._pages.get(BACKGROUND_PAGE)
         if background is not None:
             _stop_activity(background)
@@ -1639,13 +1744,17 @@ def _open_when_ready(app, url, timeout=60):
 
 def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
                 port=DEFAULT_PORT, open_browser=True, log_level='warning',
-                invalidate=None, skip=None, accept=None):
+                invalidate=None, skip=None, accept=None, progress_path=None, restore=None):
     """Serve workflow.py's kwebui app and run `sequence` through `run_one`.
 
     `invalidate(names)` (optional) is called before steps `names` are run AGAIN
     after a jump / Reset, so the caller can forget their earlier results;
     `skip(names)` (optional) when a forward jump passes over steps `names`;
     `accept(name)` (optional) when the workflow goes on past a step that had failed.
+    `progress_path` (optional): where each step's outcome is recorded (PROGRESS_FILE).
+    `restore` (optional): records of an EARLIER run ({step: record}); the leading
+    steps that are done (PROGRESS_DONE) are shown as such and the run resumes at
+    the first one that is not. None: start at the first step (a fresh record).
 
     Blocks until interrupted: the server stays up after the pipeline finishes
     so the final tracker/container state remains visible. That is also why the
@@ -1660,6 +1769,7 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
 
     bridge = KwuiBridge(tracker, container, app)
     bridge.set_sequence(sequence)
+    bridge.progress_path = progress_path
     set_active_bridge(bridge)
 
     requested_port = port
@@ -1699,9 +1809,33 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
         bridge.reset_steps(names)
         return index
 
+    def resume_index():
+        """Restore what an earlier run finished and return the index to start at."""
+        done = []
+        for name in sequence:
+            rec = (restore or {}).get(name)
+            if not rec or rec.get('status') not in PROGRESS_DONE:
+                break
+            done.append(name)
+        bridge.restore_progress({n: restore[n] for n in done})
+        for name in done:
+            if accept is not None:
+                accept(name)   # counts as run: not started again as a dependency
+        if done:
+            hint = ('Click a step and press "Restart step" to run it again; '
+                    '"Reset all" starts over.')
+            if len(done) == len(sequence):
+                print(f'\n[kwui] All {len(done)} step(s) finished in an earlier run. {hint}',
+                      flush=True)
+                bridge.show_step_page(done[-1])
+            else:
+                print(f"\n[kwui] Resuming at step '{sequence[len(done)]}' — finished earlier: "
+                      f"{', '.join(done)}. {hint}", flush=True)
+        return len(done)
+
     def pipeline():
         _wait_for_browser(app)
-        index = 0
+        index = resume_index()
         while True:
             failed = None
             while index < len(sequence):
