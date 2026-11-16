@@ -576,10 +576,38 @@ If your node needs its own Python packages, declare an environment (see Step 5):
 
 ```yaml
 python_environment:
-  env_manager: venv        # null | venv | conda | pixi
+  env_manager: venv        # null | venv | conda | pixi | uv
   env_directory: .venv
   requirements: requirements.txt
 ```
+
+With `env_manager: uv` the environment is built by [uv](https://docs.astral.sh/uv/) instead (much
+faster), and two more things work:
+
+```yaml
+python_environment:
+  env_manager: uv
+  env_directory: .venv
+  requirements: pyproject.toml   # or requirements.txt — a pyproject must be named exactly that
+  python: "3.11"                 # optional: the env's Python version (in quotes!)
+```
+
+**Where the Python version goes — one place per node:**
+
+| Node's requirements file | Put the version in | Example |
+|---|---|---|
+| `pyproject.toml` (uv) | its `requires-python` | `requires-python = ">=3.11,<3.13"` |
+| `environment.yml` (conda) | its dependencies | `- python=3.11` |
+| `requirements.txt` (uv or conda), or none | `python:` in `node_config.yaml` | `python: "3.11"` |
+
+kpl creates the environment with that version (uv and conda download it if it isn't on the
+machine). Without any version the environment gets kpl's own Python version, as with `venv`.
+With a `pyproject.toml`, `python:` may additionally pin a version **inside** `requires-python`;
+a version outside it is refused. With an `environment.yml` that pins `python`, `python:` is
+refused — keep it in the file. Write `python:` in quotes: unquoted, YAML reads `3.10` as 3.1.
+An existing environment with another version is kept and only reported: delete its folder and
+install again to switch. Whatever the manager, the environment
+must contain `pyyaml` (every node imports `kpipeline`, which needs it) plus the node's own packages.
 
 If your node should drive a whole group as a subroutine (§4.5, §9), declare
 its slot(s):
@@ -701,7 +729,7 @@ If the node declared a `python_environment`, install it once per machine:
 kpl node_env install --node_type my_node
 ```
 
-For `venv` environments this creates `.venv/` inside the node directory and installs its `requirements.txt` automatically. `conda` and `pixi` environments must currently be set up manually at the declared `env_directory`. When the node runs, kpipeliner uses that environment's Python — so every node can have its own, mutually incompatible dependencies.
+For `venv`, `uv` and `conda` environments this creates the environment (at `env_directory` inside the node directory) and installs its `requirements` automatically: with `uv` also a `pyproject.toml`'s dependencies; with `conda` an `environment.yml` (conda packages, `conda env create`/`update`) or a `requirements.txt` (pip packages into the conda env) — each with the Python version from the table above. `conda` (or `mamba`) must be installed. An existing environment is reused (to change its Python version, delete the folder and install again). `pixi` environments must currently be set up manually at the declared `env_directory`. When the node runs, kpipeliner uses that environment's Python — so every node can have its own, mutually incompatible dependencies.
 
 If a node declares **no** environment (`env_manager: null` or no `python_environment` section), it runs with the same Python `kpl` itself is running under — the venv configured at install time (`./install.sh --venv`, `config.yaml`'s `python_env`) if one is set, otherwise the default python environment `kpl` was invoked with — not whatever Python happens to be active in your shell at that specific moment.
 

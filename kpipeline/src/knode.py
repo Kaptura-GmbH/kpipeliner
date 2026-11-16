@@ -3,17 +3,107 @@ import os
 import sys
 import json
 import shlex
+import shutil
 import subprocess
 import inspect
 import argparse
 import logging
 import traceback
 import queue
+import re
 import threading
 import time
 from datetime import datetime
 
 from kpipeline.src.kparameter import KParameter
+
+# ---------------------------------------------------------------------------
+# Python version of a node's own environment (python_environment: python / pyproject's
+# requires-python / environment.yml's python pin) — see KNode.install_env.
+# ---------------------------------------------------------------------------
+
+def _version_tuple(text):
+    m = re.match(r'\s*(\d+(?:\.\d+)*)', str(text))
+    return tuple(int(x) for x in m.group(1).split('.')) if m else ()
+
+
+def _clause_ok(clause, version):
+    """One `op version` clause of a requires-python specifier (PEP 440 subset that
+    requires-python uses in practice). Unknown syntax never blocks (uv decides then)."""
+    m = re.match(r'\s*(~=|===|==|!=|<=|>=|<|>)\s*(\d+(?:\.\d+)*)(\.\*)?\s*$', clause)
+    if not m:
+        return True
+    op, ver, wild = m.group(1), m.group(2), m.group(3)
+    target = _version_tuple(ver)
+    if wild and op in ('==', '!='):
+        same = version[:len(target)] == target
+        return same if op == '==' else not same
+    pad = lambda t: t + (0,) * (3 - len(t)) if len(t) < 3 else t
+    v, t = pad(version), pad(target)
+    if op in ('==', '==='):
+        return v == t
+    if op == '!=':
+        return v != t
+    if op == '>=':
+        return v >= t
+    if op == '<=':
+        return v <= t
+    if op == '>':
+        return v > t
+    if op == '<':
+        return v < t
+    # ~=X.Y  ->  >=X.Y, ==X.*      ~=X.Y.Z  ->  >=X.Y.Z, ==X.Y.*
+    return v >= t and version[:len(target) - 1] == target[:-1]
+
+
+def python_satisfies(spec, version):
+    """Whether Python `version` ("3.11" or "3.11.4") is allowed by a requires-python
+    `spec` (">=3.10,<3.13", "==3.11.*", "~=3.11"). A bare major.minor counts as
+    allowed when some release of it could match (checked at x.y.0 and x.y.999)."""
+    parts = _version_tuple(version)
+    if not parts:
+        return True
+    candidates = [parts + (0,), parts + (999,)] if len(parts) == 2 else [parts]
+    clauses = [c for c in str(spec).split(',') if c.strip()]
+    return any(all(_clause_ok(c, v) for c in clauses) for v in candidates)
+
+
+def read_requires_python(pyproject_path):
+    """[project] requires-python of a pyproject.toml, or None."""
+    try:
+        import tomllib   # Python >= 3.11
+        with open(pyproject_path, 'rb') as f:
+            return (tomllib.load(f).get('project') or {}).get('requires-python')
+    except ImportError:   # Python 3.10: the key is a plain one-line string in practice
+        m = re.search(r'^\s*requires-python\s*=\s*["\']([^"\']+)["\']',
+                      open(pyproject_path).read(), re.M)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def conda_python_pin(env_yml_path):
+    """The `python...` entry of an environment.yml's dependencies (e.g. "python=3.11"),
+    or None. `python-dateutil` and friends are not a pin."""
+    try:
+        with open(env_yml_path) as f:
+            deps = (yaml.safe_load(f) or {}).get('dependencies') or []
+    except Exception:
+        return None
+    for dep in deps:
+        if isinstance(dep, str) and re.match(r'^python(\s*[=<>!~ ].*)?$', dep.strip()):
+            return dep.strip()
+    return None
+
+
+def _env_python_version(python):
+    """x.y.z of the interpreter at `python`, or '' if it can't be run."""
+    try:
+        return subprocess.run([python, '-c', 'import sys; print("%d.%d.%d" % sys.version_info[:3])'],
+                              capture_output=True, text=True, timeout=60).stdout.strip()
+    except Exception:
+        return ''
+
 
 #: Set by `kpl run/run_debug --ignore-node-env` to the interpreter every node must
 #: run with (the python active in the user's shell); inherited by nested kpl runs.
@@ -576,6 +666,8 @@ class KNode:
         self.env_manager = py_env.get('env_manager')
         self.env_directory = py_env.get('env_directory', '.venv')
         self.requirements = py_env.get('requirements')
+        # env_manager: uv only — the env's Python version, e.g. "3.11" (uv downloads it if missing)
+        self.python_version = py_env.get('python')
 
         for item in cfg.get('inputs', []) or []:
             name = item['name']
@@ -870,7 +962,7 @@ class KNode:
             return forced
         if not self.env_manager:
             return self._default_python()
-        if self.env_manager == 'venv':
+        if self.env_manager in ('venv', 'uv'):   # a uv env IS a venv: it runs the same way
             env_dir = self._resolve_env_dir()
             prefix = os.path.join(env_dir, 'bin', 'python')
             if not os.path.exists(prefix):
@@ -880,7 +972,12 @@ class KNode:
             return prefix
         if self.env_manager == 'conda':
             env_dir = self._resolve_env_dir()
-            return os.path.join(env_dir, 'bin', 'python3')
+            prefix = os.path.join(env_dir, 'bin', 'python3')
+            if not os.path.exists(prefix):
+                raise FileNotFoundError(
+                    f'conda env not found at {env_dir}. Run: kpl node_env install'
+                )
+            return prefix
         if self.env_manager == 'pixi':
             return f'pixi run --manifest-path {self.env_directory}/pixi.toml python'
         return self._default_python()
@@ -1106,8 +1203,145 @@ class KNode:
                     subprocess.run([pip, 'install', '-r', req_file], check=True)
             return True
 
+        if self.env_manager == 'uv':
+            return self._install_uv_env()
+
+        if self.env_manager == 'conda':
+            return self._install_conda_env()
+
         print(f'Environment manager "{self.env_manager}" install not automated. Please set it up manually.')
         return False
+
+    def _install_uv_env(self):
+        """env_manager: uv — a normal venv (so a node runs exactly as with `venv`), created
+        and filled by uv: much faster, `requirements` may also be a pyproject.toml, and
+        `python: "3.11"` picks the env's Python version (uv downloads it if missing).
+        Without `python`, the env gets kpl's own interpreter version, like `venv` does."""
+        uv = shutil.which('uv')
+        if not uv:
+            print('env_manager "uv" needs the uv tool, which is not on PATH. '
+                  'Install it: https://docs.astral.sh/uv/  (or: pip install uv)')
+            return False
+        req = None
+        if self.requirements:
+            req = os.path.join(self.node_dir, str(self.requirements))
+            name = os.path.basename(req)
+            # uv tells the format from the FILE NAME: any other *.toml is taken for a
+            # pylock file and refused with a confusing message — say it plainly here.
+            if name.endswith('.toml') and name != 'pyproject.toml' and not name.startswith('pylock.'):
+                print(f"requirements: {self.requirements} — uv reads project dependencies only "
+                      f"from a file named exactly 'pyproject.toml' (or a requirements .txt file).")
+                return False
+            if not os.path.exists(req):
+                print(f'Warning: requirements file {req} not found — nothing to install.')
+                req = None
+        version = self._python_version_setting()
+        # A pyproject's requires-python is the standard place for the version. uv does
+        # NOT check it when installing into an env (probed: a >=3.13 project installs
+        # into 3.12 without a word), so kpl applies it when the env is created.
+        requires = (read_requires_python(req)
+                    if req and os.path.basename(req) == 'pyproject.toml' else None)
+        if version and requires and not python_satisfies(requires, version):
+            print(f'python: "{version}" in node_config.yaml is outside requires-python '
+                  f'"{requires}" of {self.requirements} — set the version in one place.')
+            return False
+        want = version or requires
+        env_dir = self._resolve_env_dir()
+        py = os.path.join(env_dir, 'bin', 'python')
+        try:
+            if not os.path.exists(py):
+                source = ('python: in node_config.yaml' if version else
+                          f'requires-python of {self.requirements}' if requires else 'kpl\'s own')
+                print(f'Creating uv env at {env_dir} (Python {want or sys.executable}, {source}) ...')
+                subprocess.run([uv, 'venv', env_dir, '--python', want or sys.executable], check=True)
+            elif want:
+                have = _env_python_version(py)
+                ok = ((have == version or have.startswith(version + '.')) if version
+                      else python_satisfies(requires, have))
+                if have and not ok:
+                    print(f'Note: the env at {env_dir} has Python {have}, but {want!r} is asked for. '
+                          f'Delete that folder and install again to switch.')
+            if req:
+                print(f'Installing {self.requirements} with uv ...')
+                subprocess.run([uv, 'pip', 'install', '-r', req, '--python', py], check=True)
+        except subprocess.CalledProcessError as exc:
+            print(f'uv failed (exit code {exc.returncode}) — see its message above.')
+            return False
+        return True
+
+    def _python_version_setting(self):
+        """python_environment's `python:` as text, or None. Warns about an unquoted
+        version, which YAML reads as a number (3.10 -> 3.1)."""
+        version = getattr(self, 'python_version', None)
+        if isinstance(version, float):
+            print(f'Warning: python: {version} is a number in YAML (3.10 reads as 3.1) — '
+                  f'write it in quotes, e.g. python: "3.10".')
+        return str(version).strip() if version not in (None, '') else None
+
+    def _install_conda_env(self):
+        """env_manager: conda — a prefix env at env_directory (conda/mamba create -p).
+
+        requirements:
+          environment.yml (.yaml) — conda packages; its `python=...` pin, if any, IS the
+                                    version (then `python:` must not be set as well)
+          requirements.txt        — pip packages, installed into the conda env's python
+        Version without a pin in the file: `python:`, else kpl's own major.minor.
+        An existing env is reused (environment.yml: `conda env update`), never deleted."""
+        conda = os.environ.get('CONDA_EXE') or shutil.which('conda') or shutil.which('mamba')
+        if not conda:
+            print('env_manager "conda" needs conda (or mamba), which was not found '
+                  '(no CONDA_EXE, not on PATH). Install Miniforge: https://conda-forge.org/download/')
+            return False
+        req, kind = None, None
+        if self.requirements:
+            req = os.path.join(self.node_dir, str(self.requirements))
+            name = os.path.basename(req).lower()
+            if name.endswith(('.yml', '.yaml')):
+                kind = 'yml'
+            elif name.endswith('.txt'):
+                kind = 'txt'
+            else:
+                print(f'requirements: {self.requirements} — for conda use an environment.yml '
+                      f'(conda packages) or a requirements .txt file (pip packages).')
+                return False
+            if not os.path.exists(req):
+                print(f'Warning: requirements file {req} not found — creating the env without it.')
+                req, kind = None, None
+        version = self._python_version_setting()
+        pin = conda_python_pin(req) if kind == 'yml' else None
+        if version and pin:
+            print(f"python: \"{version}\" in node_config.yaml and '{pin}' in {self.requirements} — "
+                  f"set the version in one place (preferably the environment.yml).")
+            return False
+        if not version and not pin:
+            version = '%d.%d' % sys.version_info[:2]   # same version as kpl, like venv/uv
+        env_dir = self._resolve_env_dir()
+        py = os.path.join(env_dir, 'bin', 'python3')
+        try:
+            if not os.path.exists(py):
+                if pin:
+                    print(f"Creating conda env at {env_dir} from {self.requirements} ({pin}) ...")
+                    subprocess.run([conda, 'env', 'create', '-p', env_dir, '-f', req], check=True)
+                else:
+                    print(f'Creating conda env at {env_dir} (python={version}) ...')
+                    subprocess.run([conda, 'create', '-p', env_dir, f'python={version}', '-y'], check=True)
+                    if kind == 'yml':
+                        subprocess.run([conda, 'env', 'update', '-p', env_dir, '-f', req], check=True)
+            else:
+                have = _env_python_version(py)
+                if have and version and not (have == version or have.startswith(version + '.')):
+                    print(f'Note: the env at {env_dir} has Python {have}, but {version!r} is asked for. '
+                          f'Delete that folder and install again to switch.')
+                if kind == 'yml':
+                    print(f'Updating the conda env at {env_dir} from {self.requirements} ...')
+                    subprocess.run([conda, 'env', 'update', '-p', env_dir, '-f', req], check=True)
+            if kind == 'txt':
+                print(f'Installing {self.requirements} with pip into the conda env ...')
+                subprocess.run([py, '-m', 'pip', 'install', '-r', req], check=True)
+        except subprocess.CalledProcessError as exc:
+            print(f'conda failed (exit code {exc.returncode}) — see its message above.')
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Parsing helpers

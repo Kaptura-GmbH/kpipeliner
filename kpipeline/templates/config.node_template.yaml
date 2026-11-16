@@ -88,6 +88,8 @@ description: "Describe what this node does."
 #     type: DIR
 
 # python_environment:
-#   env_manager: null     # null | venv | conda | pixi
-#   env_directory: .venv  # path to environment
-#   requirements: requirements.txt
+#   env_manager: null     # null | venv | conda | pixi | uv
+#   env_directory: .venv  # path to environment (relative to this node dir; ../.venv = shared)
+#   requirements: requirements.txt   # uv also: pyproject.toml (exactly that name); conda also: environment.yml
+#   python: "3.11"        # uv / conda, optional: the env's Python version (quoted). Put it in ONE place:
+#                         #   pyproject.toml -> requires-python, environment.yml -> python=3.11, else here

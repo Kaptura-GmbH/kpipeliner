@@ -216,9 +216,13 @@ outputs:
 # Only if the node needs its own packages (omit otherwise — the node then runs
 # in kpipeliner's own Python environment):
 # python_environment:
-#   env_manager: venv       # null | venv | conda | pixi
-#   env_directory: .venv    # created inside the node dir for venv
-#   requirements: requirements.txt
+#   env_manager: venv       # null | venv | conda | pixi | uv
+#   env_directory: .venv    # created inside the node dir for venv/uv
+#   requirements: requirements.txt   # uv also: pyproject.toml (exactly that name); conda also: environment.yml
+#   python: "3.11"          # uv/conda, optional, QUOTED. Version in ONE place: pyproject.toml ->
+#                           # requires-python, environment.yml -> python=X, else here. Default: kpl's version
+# The env must contain pyyaml (nodes import kpipeline) plus the node's packages.
+# venv and uv envs run identically (<env>/bin/python); uv just builds them (fast).
 
 # Only if this node type should drive a whole GROUP as a subroutine (§3.6):
 # underlying_groups:
