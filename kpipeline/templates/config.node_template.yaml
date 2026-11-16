@@ -93,3 +93,5 @@ description: "Describe what this node does."
 #   requirements: requirements.txt   # uv also: pyproject.toml (exactly that name); conda also: environment.yml
 #   python: "3.11"        # uv / conda, optional: the env's Python version (quoted). Put it in ONE place:
 #                         #   pyproject.toml -> requires-python, environment.yml -> python=3.11, else here
+#   (uv + pyproject.toml + a uv.lock next to it -> exactly the locked versions via `uv sync --locked`;
+#    the env must then be inside this node dir, as sync removes every package not in the lock)

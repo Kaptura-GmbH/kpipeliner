@@ -613,7 +613,21 @@ With a `pyproject.toml`, `python:` may additionally pin a version **inside** `re
 a version outside it is refused. With an `environment.yml` that pins `python`, `python:` is
 refused — keep it in the file. Write `python:` in quotes: unquoted, YAML reads `3.10` as 3.1.
 An existing environment with another version is kept and only reported: delete its folder and
-install again to switch. Whatever the manager, the environment
+install again to switch.
+
+**Exact, reproducible versions (optional, uv):** run `uv lock` in the node folder and keep the
+resulting `uv.lock` next to its `pyproject.toml`. `kpl node_env install` then installs exactly the
+locked versions (`uv sync --locked`) instead of resolving the newest ones, so every machine gets the
+same environment. Without a `uv.lock` nothing changes. Good to know:
+
+- The environment is made to match the lock **exactly** — packages installed into it by hand are
+  removed. That is why `env_directory` must then be inside the node folder (e.g. `.venv`); a shared
+  environment such as `../.venv` is refused, because it would remove the other nodes' packages.
+- After changing `pyproject.toml`, run `uv lock` again — an outdated lock is refused with that hint.
+- `pyyaml` must be among the locked dependencies (kpl warns if it is missing).
+- An existing environment is never rebuilt, even if the version differs (only reported).
+
+Whatever the manager, the environment
 must contain `pyyaml` (every node imports `kpipeline`, which needs it) plus the node's own packages.
 
 If your node should drive a whole group as a subroutine (§4.5, §9), declare

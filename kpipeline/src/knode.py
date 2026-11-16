@@ -1248,6 +1248,22 @@ class KNode:
         want = version or requires
         env_dir = self._resolve_env_dir()
         py = os.path.join(env_dir, 'bin', 'python')
+        # Optional: a uv.lock next to the pyproject.toml -> install EXACTLY the locked versions.
+        lock = (os.path.join(os.path.dirname(req), 'uv.lock')
+                if req and os.path.basename(req) == 'pyproject.toml' else None)
+        if lock and not os.path.exists(lock):
+            lock = None
+        if lock:
+            # uv sync makes the env match the lock exactly: it UNINSTALLS everything else
+            # (probed). An env outside the node folder may be shared with other nodes,
+            # whose packages it would remove -> refused before anything is created.
+            node_real = os.path.realpath(self.node_dir)
+            if not os.path.realpath(env_dir).startswith(node_real + os.sep):
+                print(f'{lock} makes uv install exactly the locked packages and remove all '
+                      f'others, but env_directory {self.env_directory!r} is outside the node '
+                      f'folder (it may be shared with other nodes). Put the env inside the node '
+                      f'folder (e.g. env_directory: .venv), or remove uv.lock to install without it.')
+                return False
         try:
             if not os.path.exists(py):
                 source = ('python: in node_config.yaml' if version else
@@ -1261,12 +1277,32 @@ class KNode:
                 if have and not ok:
                     print(f'Note: the env at {env_dir} has Python {have}, but {want!r} is asked for. '
                           f'Delete that folder and install again to switch.')
-            if req:
+            if lock:
+                print(f'Installing exactly the versions in {lock} (uv sync --locked) ...')
+                env = dict(os.environ, UV_PROJECT_ENVIRONMENT=os.path.abspath(env_dir))
+                env.pop('VIRTUAL_ENV', None)   # an activated shell env would only add a uv warning
+                # --python = the env's OWN interpreter: with any other request (a different
+                # version, or a .python-version file in the node folder) uv sync DELETES the
+                # env and builds a new one (probed) — kpl never deletes an env.
+                # --no-install-project: node.py runs as a script; the node is no package.
+                subprocess.run([uv, 'sync', '--locked', '--no-install-project',
+                                '--project', os.path.dirname(req), '--python', py],
+                               check=True, env=env)
+            elif req:
                 print(f'Installing {self.requirements} with uv ...')
                 subprocess.run([uv, 'pip', 'install', '-r', req, '--python', py], check=True)
         except subprocess.CalledProcessError as exc:
             print(f'uv failed (exit code {exc.returncode}) — see its message above.')
+            if lock:
+                print(f'If uv.lock is out of date with pyproject.toml: run `uv lock` in '
+                      f'{os.path.dirname(req)} and install again.')
             return False
+        # Every node imports kpipeline, which needs pyyaml — and a locked sync removes
+        # anything not in the lock, so check it rather than fail at the first run.
+        if req and subprocess.run([py, '-c', 'import yaml'], capture_output=True).returncode != 0:
+            print(f'Warning: the env at {env_dir} has no pyyaml, but every node imports kpipeline, '
+                  f'which needs it — add pyyaml to {self.requirements}'
+                  + (' and run `uv lock`.' if lock else '.'))
         return True
 
     def _python_version_setting(self):
