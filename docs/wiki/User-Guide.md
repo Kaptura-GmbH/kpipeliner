@@ -336,7 +336,11 @@ While running, node colors on the canvas (and in the minimap) follow the executi
 
 ![Terminal panel with live progress](images/terminal-panel.png)
 
-The bottom panel shows live per-node progress bars, log lines (color-coded: info, warning, error, output), and the final run result. The status strip shows the run queue and system load:
+The bottom panel shows live per-node progress bars, log lines, and the final run result. Colors
+work like in a terminal: the level tag (`info` green, `warning` yellow, `error` red, `output`
+cyan) and the node name are colored, and colors your node prints itself (ANSI codes — standard,
+bright, 256-color and true color, bold/italic/underline) are shown as colors too. Other control
+sequences (cursor moves, clear-line) are left out, and printed text is always shown as text. The status strip shows the run queue and system load:
 
 ![Status bar, idle](images/status-bar-idle.png)
 

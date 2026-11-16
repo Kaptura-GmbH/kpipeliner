@@ -69,7 +69,9 @@ export default function TerminalPanel({ logs, progress, systemStats, isRunning, 
       <div className="terminal-log" ref={logRef}>
         {logs.map((l, i) => (
           <div key={i} className={`log-line ${l.cls || 'log-info'}`}>
-            {l.text}
+            {l.segs
+              ? l.segs.map((p, j) => <span key={j} style={p.style || undefined}>{p.text}</span>)
+              : l.text}
           </div>
         ))}
         {logs.length === 0 && (

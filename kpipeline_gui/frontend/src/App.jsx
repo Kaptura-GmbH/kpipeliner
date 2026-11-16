@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
+import { hasAnsi, parseAnsi, stripAnsi } from './ansi'
 import Toolbar from './components/Toolbar.jsx'
 import GraphPanel from './components/GraphPanel.jsx'
 import ComponentPanel from './components/ComponentPanel.jsx'
@@ -236,11 +237,18 @@ export default function App() {
   function handleWsMessage(msg) {
     if (msg.type === 'log') {
       const line = msg.data || ''
+      // A line that carries its own ANSI colours (kpl's "[level] <node>" prefix, or a
+      // node's own colour output) is shown like a terminal would: default colour +
+      // its codes. A plain line keeps the per-line colour by its "[level]" tag.
+      // Parsed ONCE here, not on every render of the up to 2000 kept lines.
       let cls = 'log-info'
-      if (line.includes('[error]')) cls = 'log-error'
-      else if (line.includes('[output]')) cls = 'log-output'
-      else if (line.includes('[warning]')) cls = 'log-warn'
-      pendingRef.current.logs.push({ text: line, cls })
+      if (!hasAnsi(line)) {
+        const plain = stripAnsi(line)
+        if (plain.includes('[error]')) cls = 'log-error'
+        else if (plain.includes('[output]')) cls = 'log-output'
+        else if (plain.includes('[warning]')) cls = 'log-warn'
+      }
+      pendingRef.current.logs.push({ text: line, cls, segs: hasAnsi(line) ? parseAnsi(line) : null })
       scheduleFlush()
     } else if (msg.type === 'progress') {
       const { message, progress: pct, max, status } = msg
