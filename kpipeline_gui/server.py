@@ -49,6 +49,7 @@ sys.path.insert(0, PIPELINER_DIR)
 
 from kpipeline import KGraph  # noqa: E402
 from kpipeline.src.kgraph import is_valid_name  # noqa: E402
+from kpipeline.src.knode import _LEVEL_NAME_TO_NUM  # noqa: E402
 from kpipeline.src.kbase_nodes import (  # noqa: E402
     get_group_base_nodes_dir, resolve_base_nodes_dirs, resolve_groups_dir,
     resolve_groups_dirs, scan_base_nodes,
@@ -461,6 +462,149 @@ def _name_error(name, what='node'):
         return None
     return JSONResponse({'ok': False, 'msg': f"Invalid {what} name {name!r}: only letters, "
                                              f"digits and '_' are allowed."}, status_code=400)
+
+
+# ── Pipeline settings (Properties panel with nothing selected) ───────────────
+#
+# The top-level keys of graph_config.yaml a user edits by hand. `frozen_nodes` is NOT
+# among them on purpose: save_graph rebuilds it from the nodes' `frozen` flags on every
+# save, so the GUI edits those flags instead (a value written here would be lost).
+
+_PIPELINE_TEXT_KEYS = ('name', 'description', 'author', 'date', 'version')
+_PIPELINE_DEFAULTS = {
+    'name': '', 'description': '', 'author': '', 'date': '', 'version': '',
+    'available_nodes': [], 'load_default_base_nodes_dir': True, 'custom_base_nodes_dirs': [],
+    'groups_dir': '', 'cache_dir': 'cache', 'data_dir': 'data',
+    'log_level': 'INFO', 'log_enabled': True,
+}
+#: cache_dir/data_dir reach the node's shell command inside "..." — these would still
+#: be expanded there. Node dirs found via custom_base_nodes_dirs go in UNQUOTED, so for
+#: those whitespace is refused too (it would split the command anyway).
+_SHELL_UNSAFE = set('"`$\\\n\r')
+_SHELL_UNSAFE_UNQUOTED = _SHELL_UNSAFE | set(" \t'();|&<>*?[]{}!#~")
+
+
+def _pipeline_settings(cfg: dict) -> dict:
+    out = {}
+    for key, default in _PIPELINE_DEFAULTS.items():
+        val = cfg.get(key, default)
+        if key in _PIPELINE_TEXT_KEYS or key in ('groups_dir', 'cache_dir', 'data_dir', 'log_level'):
+            val = '' if val is None else str(val)   # yaml turns 2026-01-01 into a date
+        elif key in ('available_nodes', 'custom_base_nodes_dirs'):
+            val = [str(v) for v in (val or [])]
+        else:
+            val = bool(val)
+        out[key] = val
+    return out
+
+
+def _check_pipeline_setting(key, val):
+    """(normalized value, None) or (None, error message)."""
+    if key in _PIPELINE_TEXT_KEYS:
+        if not isinstance(val, str):
+            return None, f'{key} must be text.'
+        return val.strip() if key != 'description' else val, None
+    if key in ('load_default_base_nodes_dir', 'log_enabled'):
+        if not isinstance(val, bool):
+            return None, f'{key} must be true or false.'
+        return val, None
+    if key == 'log_level':
+        level = str(val).strip().upper()
+        if level not in _LEVEL_NAME_TO_NUM:
+            return None, f"log_level must be one of {', '.join(_LEVEL_NAME_TO_NUM)}."
+        return level, None
+    if key in ('cache_dir', 'data_dir'):
+        path = str(val).strip()
+        if not path:
+            return None, f'{key} cannot be empty.'
+        if set(path) & _SHELL_UNSAFE:
+            return None, f'{key} must not contain quotes, $, ` or \\.'
+        return path, None
+    if key == 'groups_dir':
+        path = str(val or '').strip()
+        if '\n' in path or '\r' in path:
+            return None, 'groups_dir must be a single line.'
+        return path, None
+    if key == 'custom_base_nodes_dirs':
+        if not isinstance(val, list):
+            return None, 'custom_base_nodes_dirs must be a list.'
+        dirs = [str(d).strip() for d in val if str(d).strip()]
+        for d in dirs:
+            if set(d) & _SHELL_UNSAFE_UNQUOTED:
+                return None, (f"Base-nodes dir {d!r} contains a space or a shell character; "
+                              f"node commands could not run from there.")
+        return dirs, None
+    if key == 'available_nodes':
+        if not isinstance(val, list) or not all(is_valid_name(t) for t in val):
+            return None, 'available_nodes must be a list of node type names.'
+        return list(dict.fromkeys(val)), None
+    return None, f'Unknown pipeline setting {key!r}.'
+
+
+def _installed_types(cfg: dict) -> dict:
+    return scan_base_nodes(resolve_base_nodes_dirs(
+        config_dir(),
+        load_default=bool(cfg.get('load_default_base_nodes_dir', True)),
+        custom_dirs=cfg.get('custom_base_nodes_dirs') or [],
+        pipeline_dir=_workdir,
+    ))
+
+
+def _pipeline_settings_response(cfg: dict, **extra) -> JSONResponse:
+    installed = _installed_types(cfg)
+    used = {n.get('type') for n in cfg.get('nodes', []) or []}
+    return JSONResponse({
+        'ok': True,
+        'settings': _pipeline_settings(cfg),
+        # every installed type (unfiltered), for the available_nodes choice
+        'node_types': sorted(installed),
+        # node types the graph uses that the current base-nodes dirs don't provide
+        'missing_types': sorted(t for t in used if t and t not in installed),
+        **extra,
+    })
+
+
+@app.get('/api/pipeline-settings')
+def get_pipeline_settings():
+    cfg_path = _graph_config_path()
+    if not os.path.exists(cfg_path):
+        return JSONResponse({'ok': False, 'msg': 'No graph_config.yaml in this pipeline.'})
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    return _pipeline_settings_response(cfg)
+
+
+@app.post('/api/pipeline-settings')
+async def save_pipeline_settings(body: dict):
+    """Change some top-level settings: body = {"changes": {key: value, ...}}.
+
+    async (no await inside) on purpose: it then runs on the event loop like
+    save_graph does, so the two never interleave their read-modify-write of
+    graph_config.yaml. All changes are checked first; one bad value saves nothing."""
+    changes = body.get('changes')
+    if not isinstance(changes, dict) or not changes:
+        return JSONResponse({'ok': False, 'msg': 'No changes given.'}, status_code=400)
+    clean = {}
+    for key, val in changes.items():
+        norm, err = _check_pipeline_setting(key, val)
+        if err:
+            return JSONResponse({'ok': False, 'msg': err}, status_code=400)
+        clean[key] = norm
+    cfg_path = _graph_config_path()
+    if not os.path.exists(cfg_path):
+        return JSONResponse({'ok': False, 'msg': 'No graph_config.yaml in this pipeline.'}, status_code=404)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    for key, val in clean.items():
+        if key == 'groups_dir' and not val:
+            cfg.pop('groups_dir', None)   # no key = the installation-wide group dir
+        else:
+            cfg[key] = val
+    tmp = f'{cfg_path}.{os.getpid()}.tmp'
+    with open(tmp, 'w') as f:
+        yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
+    os.replace(tmp, cfg_path)   # never a half-written graph_config.yaml
+    return _pipeline_settings_response(cfg)
 
 
 @app.get('/api/nodes')

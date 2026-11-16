@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import PipelineProperties from './PipelineProperties'
 
 function formatSize(bytes) {
   if (bytes == null) return ''
@@ -422,7 +423,7 @@ function formatOutputValue(val) {
   return String(val)
 }
 
-export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, onRunGroup, availableGroups, onBindUnderlyingGroup, availableNodes, onBindUnderlyingNode, groupMembers }) {
+export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, onRunGroup, availableGroups, onBindUnderlyingGroup, availableNodes, onBindUnderlyingNode, groupMembers, pipelineNodeIds, frozenIds, onSetFrozen, onPaletteChange }) {
   const [inputValues, setInputValues] = useState({})
   const [titleVal, setTitleVal] = useState('')
   const [descVal, setDescVal] = useState('')
@@ -463,11 +464,10 @@ export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges,
       const edge = selectedEdges[0]
       return <EdgeProperties edge={edge} onUpdate={changes => onUpdateEdge(edge.id, changes)} />
     }
+    // Nothing selected: the pipeline's own settings (graph_config.yaml).
     return (
-      <>
-        <div className="panel-header">Properties</div>
-        <div className="props-empty">Select a node to view its properties.</div>
-      </>
+      <PipelineProperties nodeIds={pipelineNodeIds || []} frozenIds={frozenIds || []}
+        onSetFrozen={onSetFrozen} onPaletteChange={onPaletteChange} />
     )
   }
 

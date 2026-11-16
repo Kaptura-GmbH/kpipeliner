@@ -605,6 +605,18 @@ export default function App() {
     }
   }
 
+  // Pipeline settings panel: frozen_nodes is derived from each node's `frozen` flag
+  // on every graph save (server.py), so the list is edited through those flags.
+  function handleSetFrozen(ids) {
+    const want = new Set(ids)
+    const updated = nodes.map(n => {
+      if (n.type !== 'ioNode') return n
+      const f = want.has(n.id)
+      return !!n.data?.frozen === f ? n : { ...n, data: { ...n.data, frozen: f } }
+    })
+    handleGraphChange(updated, edges)
+  }
+
   // Link (edge) property updates — handle_color / hide, set from the
   // Properties panel when a plain node-to-node edge (or a jump link) is
   // selected. `handle_color` belongs to the HANDLE, not just this one wire —
@@ -1157,6 +1169,10 @@ export default function App() {
             onRun={() => selectedNode && handleRun(false)}
             onRunDebug={() => selectedNode && handleRun(true)}
             onRunGroup={() => selectedNode && executeGroupRun(selectedNode.id)}
+            pipelineNodeIds={nodes.filter(n => n.type === 'ioNode').map(n => n.id)}
+            frozenIds={nodes.filter(n => n.type === 'ioNode' && n.data?.frozen).map(n => n.id)}
+            onSetFrozen={handleSetFrozen}
+            onPaletteChange={() => axios.get(`${API}/nodes`).then(r => setNodeTypes(r.data)).catch(() => {})}
           />
         </div>
       )}

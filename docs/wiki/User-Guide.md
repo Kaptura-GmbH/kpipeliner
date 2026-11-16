@@ -274,6 +274,19 @@ Hiding a wire keeps its handles visible and highlighted (still clickable, so you
 
 ### 3.3 The Properties panel
 
+**With nothing selected** (click the empty canvas), the panel shows the pipeline's own settings
+from `graph_config.yaml` and lets you edit them: name, description, author, date, version, which
+base-node dirs are loaded (the default dir on/off, extra custom dirs), which node types the
+Components panel offers (none ticked = all), frozen nodes, the cache, data and groups dirs, and
+the log level / per-node log file. Each field is saved when you leave it (or press Enter, or tick
+a box), and "Saved to graph_config.yaml" confirms it. Values that can't work are refused with a
+message and the field goes back to the saved value — for example a cache or data dir containing
+`$`, quotes or `\`, or a base-nodes dir containing a space (node commands couldn't run from
+there). Changing the base-node dirs or the available types updates the Components panel right
+away; if the graph then uses a node type the dirs no longer provide, a warning names it. Changing
+the cache or data dir does not move existing files. Like every GUI save, this rewrites
+`graph_config.yaml` without its comments.
+
 Select a node to edit it:
 
 ![Properties panel](images/properties-panel.png)
