@@ -1166,11 +1166,21 @@ a message, as before.)
 each step ended (in `cache/<uuid>/kwui_progress.json`). When you start the workflow again, the
 tracker immediately shows the steps that are already done — finished, skipped, or passed over
 after an error — and the run **continues at the first unfinished step**: one that never ran,
-failed, or was cut off by CTRL+C. Earlier steps are not run again. Click one of them to select it
-(it shows a short note, since what a node displayed is not kept between runs) and press
+failed, or was cut off by CTRL+C. Earlier steps are not run again. Click one of them to see it
+(its last screen, see below) and press
 **Restart step** to run it — and the steps after it — again. **Reset all** starts over from the
 first step. To start from the first step right away, run with `--no-use-cache`
 (`kpl run --kwui --no-use-cache`), which also recomputes everything.
+
+**Earlier steps keep their last screen.** When a step ends (finished, error, or skipped), its page is
+saved next to the step's results (`cache/<uuid>/<step>/kwui_page.json`, pictures in
+`kwui_page_files/`). After a restart of the workflow, clicking a finished step shows that page again
+exactly as it ended — texts, tables, pictures, and the values the user had entered or ticked — under
+a small grey note. It is a view only: buttons and inputs are greyed out and do nothing. Press
+**Restart step** to run the step again live. Not kept: popups and toasts (they are momentary); a live
+camera stream (`imagestream`) is kept as its last frame. A page larger than 5 MB is not kept, and a
+step that showed nothing gets the short note instead. `kpl clean <step>` removes the kept page
+together with the step's results.
 
 A step counts as finished only while its result is still in the cache: after `kpl clean <step>`
 the workflow continues at that step. A pipeline whose workflow was last run before this

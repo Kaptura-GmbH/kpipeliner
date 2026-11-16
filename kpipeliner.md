@@ -798,8 +798,11 @@ disk).
 `kpl run --kwui` shows the leading done steps (completed/passed) in the tracker, does not run them
 again, and continues at the first other step; everything from there on runs again. A `completed`
 record only counts while the step's `outputs.yaml` exists (`kpl clean` = unfinished); no record
-file at all (older kpl) → cached steps count as completed. Restored steps are selectable
-(placeholder page) → "Restart step" re-runs them; Reset all / a restart removes the records of the
+file at all (older kpl) → cached steps count as completed. Restored steps are selectable and
+show their LAST SCREEN: every step's page is saved when it ends (`cache/<uuid>/<step>/kwui_page.json`
++ `kwui_page_files/` for pictures; incl. values the user entered; popups/toasts dropped,
+imagestream → last frame; > 5 MB or nothing drawn → a short note) and rebuilt inert (inputs
+disabled) under a grey note → "Restart step" re-runs them live; Reset all / a restart removes the records of the
 re-run steps. `--no-use-cache` starts at the first step with a fresh record.
 
 **The template's buttons:**

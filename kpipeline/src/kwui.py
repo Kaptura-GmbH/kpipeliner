@@ -863,6 +863,178 @@ def _stop_activity(widget):
         pass
 
 
+# -- page snapshots (a step's last screen, kept between runs) -------------------
+
+#: A step's page as it ended, in the step's cache dir (cache/<uuid>/<step>/), so
+#: `kpl clean <step>` drops it with the outputs. Pictures go next to it.
+PAGE_SNAPSHOT_FILE = 'kwui_page.json'
+PAGE_SNAPSHOT_FILES_DIR = 'kwui_page_files'
+PAGE_SNAPSHOT_VERSION = 1
+#: Larger snapshots are not written (the step then shows the plain placeholder).
+PAGE_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024
+#: A local picture larger than this is referenced by its path instead of copied.
+PAGE_SNAPSHOT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+#: Momentary by design (they remove themselves) — never part of a kept page.
+_SNAPSHOT_SKIP_TYPES = frozenset({'popup', 'toast'})
+#: Input widgets: always disabled on a kept page, even one without a callback (its
+#: value would still change on a click). file_uploader takes uploads over its own
+#: HTTP route, so "has an event handler" would not catch it.
+_SNAPSHOT_INPUT_TYPES = frozenset({'button', 'checkbox', 'slider', 'textedit', 'listbox',
+                                   'file_uploader'})
+
+
+def _snapshot_props(props):
+    """The props a browser needs, JSON-safe. Callables are dropped (a kept page is
+    inert); private `_` keys too, except `_local_path` (an image's file, served by
+    kwebui's /media route from that prop)."""
+    kept = {}
+    for key, value in props.items():
+        if callable(value) or (key.startswith('_') and key != '_local_path'):
+            continue
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            continue
+        kept[key] = value
+    return kept
+
+
+def _snapshot_picture(data, files_dir, suffix):
+    """Store picture bytes under their content hash; returns the file path."""
+    import hashlib
+    os.makedirs(files_dir, exist_ok=True)
+    path = os.path.join(files_dir, hashlib.sha1(data).hexdigest()[:20] + suffix)
+    if not os.path.exists(path):
+        tmp = path + '.tmp'
+        with open(tmp, 'wb') as handle:
+            handle.write(data)
+        os.replace(tmp, path)
+    return path
+
+
+def _snapshot_widget(widget, files_dir):
+    """One widget (and its subtree) as a snapshot node, or None to leave it out."""
+    wtype = getattr(widget, 'widget_type', None)
+    if not wtype or wtype in _SNAPSHOT_SKIP_TYPES:
+        return None
+    raw_props = getattr(widget, 'props', {}) or {}
+    # Same rule as _disable_interactive (a finished page): a widget with a callback is inert.
+    had_callback = any(callable(v) for v in raw_props.values())
+    props = _snapshot_props(raw_props)
+    if wtype == 'imagestream':
+        # A live feed has nothing to replay: keep its last frame as a still picture.
+        frame = None
+        try:
+            frame = widget.latest_frame()
+        except Exception:
+            pass
+        if not frame:
+            return None
+        wtype = 'image'
+        props = {'width': props.get('width', -1), 'stretch': props.get('stretch', False),
+                 '_local_path': _snapshot_picture(bytes(frame), files_dir, '.jpg')}
+    elif wtype == 'image' and props.get('_local_path'):
+        # Copy the picture: the node may have shown a temporary file.
+        source = props['_local_path']
+        try:
+            if os.path.getsize(source) <= PAGE_SNAPSHOT_MAX_IMAGE_BYTES:
+                with open(source, 'rb') as handle:
+                    props['_local_path'] = _snapshot_picture(
+                        handle.read(), files_dir, os.path.splitext(source)[1].lower())
+        except OSError:
+            pass   # gone already: the path stays, kwebui answers 404 like for the live page
+    if wtype == 'spinner':
+        props['active'] = False   # nothing is running on a kept page
+    children = [c for c in (_snapshot_widget(ch, files_dir)
+                            for ch in getattr(widget, 'children', []) or []) if c is not None]
+    return {'id': widget.id, 'type': wtype, 'props': props,
+            'highlighted': bool(getattr(widget, 'highlighted', False)),
+            'highlight_color': getattr(widget, 'highlight_color', None),
+            'visible': bool(getattr(widget, 'visible', True)),
+            'enabled': bool(getattr(widget, 'enabled', True)) and not had_callback,
+            'children': children}
+
+
+def save_page_snapshot(page, step_dir, time_text='', empty=False):
+    """Write the widgets of `page` (a step's history page) to
+    <step_dir>/kwui_page.json (`empty`: write a page without widgets). Returns True when written."""
+    files_dir = os.path.join(step_dir, PAGE_SNAPSHOT_FILES_DIR)
+    widgets = [] if empty else [n for n in (_snapshot_widget(ch, files_dir)
+                                            for ch in list(page.children)) if n is not None]
+    doc = {'version': PAGE_SNAPSHOT_VERSION, 'time': time_text, 'widgets': widgets}
+    text = json.dumps(doc)
+    if len(text.encode('utf-8')) > PAGE_SNAPSHOT_MAX_BYTES:
+        print(f'[kwui] page of {os.path.basename(step_dir)!r} is larger than '
+              f'{PAGE_SNAPSHOT_MAX_BYTES // (1024 * 1024)} MB — not kept for the next run.', flush=True)
+        return False
+    os.makedirs(step_dir, exist_ok=True)
+    path = os.path.join(step_dir, PAGE_SNAPSHOT_FILE)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as handle:
+        handle.write(text)
+    os.replace(tmp, path)
+    return True
+
+
+def load_page_snapshot(step_dir):
+    """The snapshot document of a step, or None (missing, unreadable, other version)."""
+    try:
+        with open(os.path.join(step_dir, PAGE_SNAPSHOT_FILE), encoding='utf-8') as handle:
+            doc = json.load(handle)
+    except Exception:
+        return None
+    if not isinstance(doc, dict) or doc.get('version') != PAGE_SNAPSHOT_VERSION:
+        return None
+    if not isinstance(doc.get('widgets'), list):
+        return None
+    return doc
+
+
+def _rebuild_widget(node, prefix, registry):
+    """A snapshot node -> a plain kwebui Widget tree (what the browser draws comes
+    only from type + props + these flags + children, the same for every type).
+    Ids get `prefix` so a kept page can never take events meant for a live widget
+    (kwebui routes an event to the FIRST widget with that id). Interactive types
+    are disabled (kwebui then drops their events centrally); the rest looks as it did."""
+    from kwebui.widget import Widget
+    wtype = node['type']
+    registry.get(wtype)   # unknown type (other kwebui version) -> ValueError, caller falls back
+    new_id = prefix + str(node['id'])
+    props = dict(node.get('props') or {})
+    if wtype == 'image' and props.get('_local_path'):
+        props['src'] = f'/media/{new_id}'
+    widget = Widget(new_id, wtype, props)
+    widget.highlighted = bool(node.get('highlighted'))
+    widget.highlight_color = node.get('highlight_color')
+    widget.visible = bool(node.get('visible', True))
+    widget.enabled = bool(node.get('enabled', True)) and wtype not in _SNAPSHOT_INPUT_TYPES
+    widget.children = [_rebuild_widget(child, prefix, registry)
+                       for child in node.get('children') or []]
+    return widget
+
+
+def _wire_app(widget, app):
+    widget._app = app
+    for child in widget.children:
+        _wire_app(child, app)
+
+
+def restore_page_snapshot(page, doc, prefix):
+    """Build a snapshot's widgets into `page` (an attached container), in the order
+    kwebui's own factories use: append + broadcast the parent FIRST, then wire `_app`.
+    Everything is built before anything is attached, so a bad snapshot changes nothing.
+    Returns the number of top-level widgets."""
+    app = page._app
+    built = [_rebuild_widget(node, prefix, app.registry) for node in doc['widgets']]
+    if not built:
+        return 0
+    page.children.extend(built)
+    app._on_widget_changed(page)
+    for widget in built:
+        _wire_app(widget, app)
+    return len(built)
+
+
 class KwuiBridge:
     """Parent side of the node<->UI bridge: replays a node's widget calls onto
     workflow.py's `app_container`, relays browser events back down, and — new —
@@ -883,6 +1055,7 @@ class KwuiBridge:
         self.app = app  # the KApp itself — only needed for _APP_METHODS calls
         self._widgets = {}
         self._layout_seq = 0   # never reset: layout id prefixes stay unique for the whole run
+        self._snapshot_seq = 0  # the same for the id prefixes of kept pages (restore_progress)
         self._stdin = None
         self._stdin_lock = threading.Lock()
         self._statuses = {}
@@ -1024,6 +1197,7 @@ class KwuiBridge:
                 self._set_step(node_name, 'completed')
             _stop_activity(self._out)
             self._freeze(node_name)
+            self._keep_page(node_name)
         elif state == 'FAILED':
             # A node stopped on purpose (Reset) is not an error.
             self._error_skipped.discard(node_name)   # it crashed after all: a real failure
@@ -1033,6 +1207,27 @@ class KwuiBridge:
                 self._details.pop(node_name, None)
             _stop_activity(self._out)
             self._freeze(node_name)
+            self._keep_page(node_name)
+
+    def _step_dir(self, name):
+        """cache/<uuid>/<step> — next to PROGRESS_FILE (None: nothing is kept)."""
+        return os.path.join(os.path.dirname(self.progress_path), name) if self.progress_path else None
+
+    def _keep_page(self, node_name):
+        """Save the page a step ended with (frozen already), so a later run that resumes
+        after it can show it again (restore_progress). Only tracker steps with a page."""
+        if not (self._history and node_name in self._step_ids) or not self.progress_path:
+            return
+        page = self._pages.get(node_name)
+        if page is None:
+            return
+        try:
+            # Nothing drawn by the node itself (only the "Working ..." placeholder):
+            # keep an empty page, so an older one is not shown for this run's step.
+            save_page_snapshot(page, self._step_dir(node_name), time.strftime('%Y-%m-%d %H:%M'),
+                               empty=self._fresh)
+        except Exception as exc:
+            print(f'[kwui] could not keep the page of step {node_name!r}: {exc}', flush=True)
 
     # -- progress record (resume) ---------------------------------------------
 
@@ -1062,9 +1257,9 @@ class KwuiBridge:
 
     def restore_progress(self, records):
         """Show steps `records` ({name: record}) as they ended in an EARLIER run and
-        start this run's record with them. Each restored tracker step gets a short
-        page of its own — what a node displayed is not kept between runs — which
-        also makes it selectable, so "Restart step" can run it again."""
+        start this run's record with them. Each restored tracker step gets a page of
+        its own — the page it ended with (kwui_page.json, inert), or a short note when
+        none was kept — which also makes it selectable, so "Restart step" can run it again."""
         with self._progress_lock:
             self._progress = {n: dict(r) for n, r in records.items()}
             self._write_progress()
@@ -1079,11 +1274,33 @@ class KwuiBridge:
                 when = f" ({rec['time']})" if rec.get('time') else ''
                 what = (f'was passed over in an earlier run{when}: {detail}' if passed
                         else f'finished in an earlier run{when}')
-                page.text(f"Step '{name}' {what}. What it showed is not kept between runs — "
-                          f'press "Restart step" to run it again.')
+                if not self._restore_page(name, page, what):
+                    page.text(f"Step '{name}' {what}. What it showed was not kept — "
+                              f'press "Restart step" to run it again.')
                 page.hide()
             except Exception:
                 self._pages.pop(name, None)
+
+    def _restore_page(self, name, page, what):
+        """Build the kept page of step `name` into `page` under a one-line note.
+        False when there is none (or it can't be shown) — `page` is then left empty."""
+        doc = load_page_snapshot(self._step_dir(name)) if self.progress_path else None
+        if not doc or not doc['widgets']:
+            return False
+        self._snapshot_seq += 1
+        try:
+            page.text(f'{what[0].upper()}{what[1:]} — kept view, inactive. '
+                      f'"Restart step" runs it again.', size=13, italic=True, color='#6b7280')
+            restore_page_snapshot(page, doc, f'kr{self._snapshot_seq}-')
+            return True
+        except Exception as exc:
+            print(f'[kwui] cannot show the kept page of step {name!r}: {exc}', flush=True)
+            try:
+                _stop_activity(page)
+                page.clear()
+            except Exception:
+                pass
+            return False
 
     def show_step_page(self, name):
         """Show a step's page without selecting it (used when everything was restored)."""
