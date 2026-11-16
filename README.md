@@ -44,7 +44,8 @@ uv tool install "kpipeliner[all]"    # both
 
 Configuration lives in a `config.yaml` that ships with the package; the first run copies it
 to `~/.config/kpipeliner/config.yaml` (or `$KPL_HOME/config.yaml`) so your edits survive
-upgrades. `kpl config` prints its location.
+upgrades. `kpl config` prints its location; `kpl --version` shows the installed version and
+which installation (path + Python) is running.
 
 **Developing kpipeliner itself:** clone the repository and run `uv pip install -e .` (or
 `uv sync --all-extras`) — an editable install; the checkout's own `config.yaml` is used.

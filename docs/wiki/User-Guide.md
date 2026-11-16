@@ -47,6 +47,9 @@ The installation-wide settings are in `config.yaml` (see the [Reference](#6-refe
 ships inside the package; the first run copies it to `~/.config/kpipeliner/config.yaml` (or
 `$KPL_HOME/config.yaml`) so your changes survive upgrades — `kpl config` prints where it is.
 
+`kpl --version` (or `kpl -V`) prints the installed version plus the package path and Python it runs
+from — handy to see whether a checkout or the `uv tool` copy answers.
+
 To uninstall: `uv tool uninstall kpipeliner` (or `pip uninstall kpipeliner`).
 
 *Working on kpipeliner itself?* Clone the repository and run `uv pip install -e .` for an editable install.

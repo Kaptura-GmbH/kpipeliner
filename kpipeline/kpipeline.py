@@ -1649,6 +1649,26 @@ def main():
         sys.exit(f'Error: {exc}')
 
 
+def _version_line():
+    """`kpl --version`: version + package location + interpreter (pip style), so it is clear WHICH
+    installation answered (uv tool copy vs. checkout). Version = installed package metadata
+    (hatch-vcs: from the git tag); 'unknown' when kpipeliner was never installed."""
+    import kpipeline as _pkg
+    return (f'kpl (kpipeliner) {_pkg.__version__} from {os.path.dirname(os.path.abspath(_pkg.__file__))} '
+            f'(python {sys.version.split()[0]})')
+
+
+class _VersionAction(argparse.Action):
+    """Like action='version', but printed as ONE line (argparse's own wraps it at the terminal
+    width, splitting the path)."""
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(_version_line())
+        parser.exit()
+
+
 def _main():
     global _active_python
     _active_python = _find_active_python()   # must come before _ensure_kpl_on_path()
@@ -1658,6 +1678,8 @@ def _main():
         prog='kpl',
         description='kpl (kpipeliner) – node-based pipeline manager',
     )
+    parser.add_argument('-V', '--version', action=_VersionAction,
+                        help='Show the kpipeliner version (and which installation runs) and exit')
     sub = parser.add_subparsers(dest='command', required=False)
 
     # init
