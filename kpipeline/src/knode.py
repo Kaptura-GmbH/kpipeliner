@@ -1290,7 +1290,14 @@ class KNode:
                                check=True, env=env)
             elif req:
                 print(f'Installing {self.requirements} with uv ...')
-                subprocess.run([uv, 'pip', 'install', '-r', req, '--python', py], check=True)
+                # --directory = the requirements file's folder: uv reads its SETTINGS
+                # ([tool.uv] extra-build-dependencies, index-url, ... / uv.toml) only from
+                # the folder it runs in, not from the -r file (probed: from the pipeline dir
+                # a package needing an extra build dependency failed to build).
+                # Absolute paths: with --directory, relative ones would resolve from there.
+                req_abs = os.path.abspath(req)
+                subprocess.run([uv, 'pip', 'install', '--directory', os.path.dirname(req_abs),
+                                '-r', req_abs, '--python', os.path.abspath(py)], check=True)
         except subprocess.CalledProcessError as exc:
             print(f'uv failed (exit code {exc.returncode}) — see its message above.')
             if lock:

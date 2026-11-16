@@ -223,6 +223,7 @@ outputs:
 #                           # requires-python, environment.yml -> python=X, else here. Default: kpl's version
 # The env must contain pyyaml (nodes import kpipeline) plus the node's packages.
 # venv and uv envs run identically (<env>/bin/python); uv just builds them (fast).
+# uv runs in the node dir, so [tool.uv] settings (extra-build-dependencies, index, ...) apply.
 # Optional uv.lock next to the pyproject.toml (`uv lock`) -> `uv sync --locked`: exactly the locked
 # versions, extra packages removed -> env_directory must be inside the node dir; re-lock after edits.
 

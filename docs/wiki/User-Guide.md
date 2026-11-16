@@ -615,6 +615,10 @@ refused — keep it in the file. Write `python:` in quotes: unquoted, YAML reads
 An existing environment with another version is kept and only reported: delete its folder and
 install again to switch.
 
+uv settings in the node's `pyproject.toml` (`[tool.uv]`, e.g. `extra-build-dependencies` for a package
+that needs torch to build, or a private index) — or a `uv.toml` next to a `requirements.txt` — are
+applied: kpl runs uv in the node folder.
+
 **Exact, reproducible versions (optional, uv):** run `uv lock` in the node folder and keep the
 resulting `uv.lock` next to its `pyproject.toml`. `kpl node_env install` then installs exactly the
 locked versions (`uv sync --locked`) instead of resolving the newest ones, so every machine gets the
