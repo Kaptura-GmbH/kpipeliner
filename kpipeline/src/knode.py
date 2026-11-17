@@ -108,6 +108,9 @@ def _env_python_version(python):
 #: Set by `kpl run/run_debug --ignore-node-env` to the interpreter every node must
 #: run with (the python active in the user's shell); inherited by nested kpl runs.
 IGNORE_NODE_ENV_VAR = 'KPL_IGNORE_NODE_ENV'
+#: Set by `kpl gui` for its server: the python active in the shell `kpl gui` was started
+#: from. The server hands it to a run started with the "Ignore node env" checkbox.
+GUI_ACTIVE_PYTHON_VAR = 'KPL_GUI_ACTIVE_PYTHON'
 
 
 class _LineReader:

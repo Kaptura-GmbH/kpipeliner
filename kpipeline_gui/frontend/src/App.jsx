@@ -97,8 +97,11 @@ export default function App() {
   const [logs, setLogs] = useState([])
   const [progress, setProgress] = useState({})
   const [isRunning, setIsRunning] = useState(false)
-  // Pending single-node run awaiting the clear-cache confirmation: { nodeId, debug }
+  // Pending single-node run awaiting the clear-cache confirmation: { nodeId, debug, ignoreNodeEnv }
   const [confirmRun, setConfirmRun] = useState(null)
+  // "Ignore node env" checkbox above Run/Debug This Node: a GUI-session setting (not saved,
+  // so a reload always starts with the nodes' own envs) that survives switching nodes.
+  const [ignoreNodeEnv, setIgnoreNodeEnv] = useState(false)
   // Graph held back because some nodes are missing from the base nodes:
   // { missing: [{name, type}], nodes, edges }
   const [missingPrompt, setMissingPrompt] = useState(null)
@@ -433,21 +436,31 @@ export default function App() {
     }
   }
 
-  function executeRun(nodeId, debug, clearCache) {
+  function executeRun(nodeId, debug, clearCache, ignoreNodeEnv = false) {
     setConfirmRun(null)
     clearNodeColors()
-    axios.post(`${API}/run`, { node_id: nodeId, debug, clear_cache: clearCache }).catch(() => {})
+    axios.post(`${API}/run`, { node_id: nodeId, debug, clear_cache: clearCache, ignore_node_env: ignoreNodeEnv })
+      .then(r => {
+        // An older server drops the field and runs with the node's own env — say so.
+        if (ignoreNodeEnv && r.data?.ignore_node_env !== true) {
+          setLogs(prev => [...prev, {
+            text: "'Ignore node env' was NOT applied — the GUI server is outdated; restart it (kpl gui).",
+            cls: 'log-error',
+          }])
+        }
+      })
+      .catch(() => {})
   }
 
   // Single-node run: only ask the clear-cache question when the node actually
   // has cached data; otherwise there is nothing to clear — run directly.
-  function requestNodeRun(nodeId, debug) {
+  function requestNodeRun(nodeId, debug, ignoreNodeEnv = false) {
     axios.get(`${API}/node-cache/${encodeURIComponent(nodeId)}`)
       .then(r => {
-        if (r.data?.cached) setConfirmRun({ nodeId, debug })
-        else executeRun(nodeId, debug, false)
+        if (r.data?.cached) setConfirmRun({ nodeId, debug, ignoreNodeEnv })
+        else executeRun(nodeId, debug, false, ignoreNodeEnv)
       })
-      .catch(() => setConfirmRun({ nodeId, debug }))
+      .catch(() => setConfirmRun({ nodeId, debug, ignoreNodeEnv }))
   }
 
   // Run a group like self.groups['x'].run() in node code (`kpl group run`).
@@ -463,9 +476,9 @@ export default function App() {
     })
   }
 
-  function handleRun(debug = false) {
+  function handleRun(debug = false, ignoreNodeEnv = false) {
     if (selectedNode) {
-      requestNodeRun(selectedNode.id, debug)
+      requestNodeRun(selectedNode.id, debug, ignoreNodeEnv)
     } else {
       executeRun(null, debug, false)
     }
@@ -1174,8 +1187,10 @@ export default function App() {
             onUpdateEdgesBulk={handleEdgesBulkUpdate}
             onGroupPortsChange={(action) => selectedNode && handleGroupPortsChange(selectedNode.id, action)}
             onExportGroup={(opts) => selectedNode ? handleExportGroup(selectedNode.id, opts) : Promise.reject()}
-            onRun={() => selectedNode && handleRun(false)}
-            onRunDebug={() => selectedNode && handleRun(true)}
+            onRun={() => selectedNode && handleRun(false, ignoreNodeEnv)}
+            onRunDebug={() => selectedNode && handleRun(true, ignoreNodeEnv)}
+            ignoreNodeEnv={ignoreNodeEnv}
+            onIgnoreNodeEnvChange={setIgnoreNodeEnv}
             onRunGroup={() => selectedNode && executeGroupRun(selectedNode.id)}
             pipelineNodeIds={nodes.filter(n => n.type === 'ioNode').map(n => n.id)}
             frozenIds={nodes.filter(n => n.type === 'ioNode' && n.data?.frozen).map(n => n.id)}
@@ -1272,13 +1287,13 @@ export default function App() {
               <button
                 className="btn btn-primary"
                 autoFocus
-                onClick={() => executeRun(confirmRun.nodeId, confirmRun.debug, true)}
+                onClick={() => executeRun(confirmRun.nodeId, confirmRun.debug, true, confirmRun.ignoreNodeEnv)}
               >
                 Yes
               </button>
               <button
                 className="btn"
-                onClick={() => executeRun(confirmRun.nodeId, confirmRun.debug, false)}
+                onClick={() => executeRun(confirmRun.nodeId, confirmRun.debug, false, confirmRun.ignoreNodeEnv)}
               >
                 No
               </button>

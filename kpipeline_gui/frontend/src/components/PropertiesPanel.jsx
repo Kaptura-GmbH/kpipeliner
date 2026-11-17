@@ -423,7 +423,7 @@ function formatOutputValue(val) {
   return String(val)
 }
 
-export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, onRunGroup, availableGroups, onBindUnderlyingGroup, availableNodes, onBindUnderlyingNode, groupMembers, pipelineNodeIds, frozenIds, onSetFrozen, onPaletteChange }) {
+export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, ignoreNodeEnv, onIgnoreNodeEnvChange, onRunGroup, availableGroups, onBindUnderlyingGroup, availableNodes, onBindUnderlyingNode, groupMembers, pipelineNodeIds, frozenIds, onSetFrozen, onPaletteChange }) {
   const [inputValues, setInputValues] = useState({})
   const [titleVal, setTitleVal] = useState('')
   const [descVal, setDescVal] = useState('')
@@ -849,6 +849,14 @@ export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges,
       {/* Run buttons */}
       {!isGroup && (
         <div className="props-section">
+          <div className="props-field" style={{ marginBottom: 0 }}>
+            <label className="pipeline-check"
+              title="kpl run --ignore-node-env: every node of this run uses the python that was active in the shell 'kpl gui' was started from, not the venv/conda/pixi/uv env in its node_config.yaml">
+              <input type="checkbox" checked={!!ignoreNodeEnv}
+                onChange={e => onIgnoreNodeEnvChange && onIgnoreNodeEnvChange(e.target.checked)} />
+              Ignore node env
+            </label>
+          </div>
           <button className="btn btn-primary props-run-btn" disabled={isRunning} onClick={onRun}>
             ▶ Run This Node
           </button>

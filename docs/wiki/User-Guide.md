@@ -223,6 +223,10 @@ use it too. The run prints which interpreter it uses, and warns up front if that
 import kpipeliner (it needs `pyyaml`). Nodes that start nested runs (`self.groups[...]`,
 `self.nodes[...]`) pass the choice on. Without the flag nothing changes.
 
+In the GUI, tick **Ignore node env** above *Run This Node* / *Debug This Node* (Properties panel)
+for the same effect. "Your shell" is then the one you started `kpl gui` from: start the GUI
+with the environment you want activated.
+
 ---
 
 ## 3. The GUI
@@ -311,6 +315,9 @@ Select a node to edit it:
   ![FILE input with browse button](images/properties-file-input.png)
 
 - **Run buttons** — *Run This Node* / *Debug This Node* run only this node (plus its dependencies).
+  **Ignore node env** above them adds `--ignore-node-env` to these runs: every node uses the Python
+  that was active in the shell `kpl gui` was started from instead of its own env (Step 8). The box
+  stays as set while you switch nodes; reloading the page unticks it.
 - **⬇ Download Outputs & Caches** — downloads the node's cache directory as a ZIP (handy when the server runs on another machine).
 - **🗑 Remove Caches** — deletes this node's cached results (after confirmation).
 - **🔒 Freeze Cache / 🔓 Unfreeze Cache** — toggles whether this node is protected from *Clear Cache* / `kpl clean` (§2, Step 7). A frozen node shows a small 🔒 badge on its title bar on the canvas. The same toggle is available by right-clicking the node → *🔒 Freeze cache* / *🔓 Unfreeze cache*. This is the GUI equivalent of listing the node under `frozen_nodes:` in `graph_config.yaml` — both stay in sync automatically.

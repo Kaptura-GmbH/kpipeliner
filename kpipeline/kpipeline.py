@@ -42,7 +42,7 @@ import yaml
 
 from kpipeline import KNode, KGraph, KParameter, NodeState, PipelineExecutor
 from kpipeline.src.kgraph import InvalidNameError, is_valid_name
-from kpipeline.src.knode import IGNORE_NODE_ENV_VAR
+from kpipeline.src.knode import IGNORE_NODE_ENV_VAR, GUI_ACTIVE_PYTHON_VAR
 from kpipeline.src.kbase_nodes import (
     get_default_base_nodes_dir, scan_base_nodes, find_node_dir,
 )
@@ -170,8 +170,14 @@ class Pipeliner:
         if not open_browser:
             cmd.append('--no-browser')
 
+        # The python that was active in the user's shell, captured before _ensure_kpl_on_path()
+        # put kpl's own bin dir first on PATH: a `kpl run --ignore-node-env` that the server
+        # starts would otherwise find kpl's interpreter there (GUI checkbox "Ignore node env").
+        env = dict(os.environ)
+        if _active_python:
+            env[GUI_ACTIVE_PYTHON_VAR] = _active_python
         print('Launching GUI...')
-        proc = subprocess.Popen(cmd)
+        proc = subprocess.Popen(cmd, env=env)
         try:
             proc.wait()
         except KeyboardInterrupt:

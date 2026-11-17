@@ -6,7 +6,7 @@ Serves the React frontend and provides:
   GET  /api/nodes              – available node types
   GET  /api/graph              – current graph_config.yaml as JSON
   POST /api/graph              – save graph from JSON
-  POST /api/run                – start pipeline (or a specific node)
+  POST /api/run                – start pipeline (or a specific node); ignore_node_env → --ignore-node-env
   POST /api/run-group          – run one group (`kpl group run <id>`)
   POST /api/stop               – stop current run
   GET  /api/status             – node states + system stats
@@ -49,7 +49,8 @@ sys.path.insert(0, PIPELINER_DIR)
 
 from kpipeline import KGraph  # noqa: E402
 from kpipeline.src.kgraph import is_valid_name  # noqa: E402
-from kpipeline.src.knode import _LEVEL_NAME_TO_NUM  # noqa: E402
+from kpipeline.src.knode import (  # noqa: E402
+    _LEVEL_NAME_TO_NUM, IGNORE_NODE_ENV_VAR, GUI_ACTIVE_PYTHON_VAR)
 from kpipeline.src.kbase_nodes import (  # noqa: E402
     get_group_base_nodes_dir, resolve_base_nodes_dirs, resolve_groups_dir,
     resolve_groups_dirs, scan_base_nodes,
@@ -214,7 +215,8 @@ def _kill_run_process():
             pass
 
 
-def _run_pipeline(cmd: list[str], workdir: str, pre_lines: list[str] | None = None):
+def _run_pipeline(cmd: list[str], workdir: str, pre_lines: list[str] | None = None,
+                  extra_env: dict | None = None):
     global _run_process, _node_states
 
     with _run_lock:
@@ -227,6 +229,7 @@ def _run_pipeline(cmd: list[str], workdir: str, pre_lines: list[str] | None = No
     # Mark the run as GUI-owned: kpl then writes source='gui' into
     # cache/run_state.json, so _external_running() ignores it.
     env['KPL_GUI_RUN'] = '1'
+    env.update(extra_env or {})
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -291,7 +294,7 @@ def _run_pipeline(cmd: list[str], workdir: str, pre_lines: list[str] | None = No
 
 
 def _clean_then_run(clean_cmd: list[str] | None, run_cmd: list[str], workdir: str,
-                    note: str | None = None):
+                    note: str | None = None, extra_env: dict | None = None):
     """Drop the selected node's cache, then run it. Upstream nodes keep their
     caches and are reused (caching is the default); only the node the user
     explicitly asked to run is forced to re-execute."""
@@ -309,7 +312,7 @@ def _clean_then_run(clean_cmd: list[str] | None, run_cmd: list[str], workdir: st
         except Exception as exc:
             pre_lines.append(f'[warning] Cache clean failed: {exc}')
 
-    _run_pipeline(run_cmd, workdir, pre_lines=pre_lines)
+    _run_pipeline(run_cmd, workdir, pre_lines=pre_lines, extra_env=extra_env)
 
 
 # ---------------------------------------------------------------------------
@@ -1438,6 +1441,7 @@ async def run_pipeline(request_data: dict):
     node_id = request_data.get('node_id')
     debug = request_data.get('debug', False)
     clear_cache = request_data.get('clear_cache', False)
+    ignore_node_env = request_data.get('ignore_node_env') is True
 
     if node_id:
         err = _name_error(node_id)   # goes into `kpl clean <id>` (rmtree) and `kpl run <id>`
@@ -1447,6 +1451,15 @@ async def run_pipeline(request_data: dict):
     kpipeliner_cmd = kpl_command()
 
     sub = 'run_debug' if debug else 'run'
+    # "Ignore node env" checkbox: every node runs with the python that was active in the
+    # shell `kpl gui` was started from, not its own venv/conda/pixi env. The flag must come
+    # BEFORE the node id (everything after it goes to the node as --input value pairs).
+    flags, extra_env = [], {}
+    if ignore_node_env:
+        flags = ['--ignore-node-env']
+        shell_python = os.environ.get(GUI_ACTIVE_PYTHON_VAR)
+        if shell_python and not os.environ.get(IGNORE_NODE_ENV_VAR):
+            extra_env[IGNORE_NODE_ENV_VAR] = shell_python
 
     if node_id:
         # Drop the selected node's cache first only when the user confirmed it
@@ -1465,14 +1478,16 @@ async def run_pipeline(request_data: dict):
                 note = f"Node '{node_id}' is frozen — keeping its cache."
             else:
                 clean_cmd = kpipeliner_cmd + ['clean', node_id]
-        cmd = kpipeliner_cmd + [sub, node_id]
-        threading.Thread(target=_clean_then_run, args=(clean_cmd, cmd, _workdir, note),
+        cmd = kpipeliner_cmd + [sub, *flags, node_id]
+        threading.Thread(target=_clean_then_run, args=(clean_cmd, cmd, _workdir, note, extra_env),
                          daemon=True).start()
     else:
-        cmd = kpipeliner_cmd + [sub]
-        threading.Thread(target=_run_pipeline, args=(cmd, _workdir), daemon=True).start()
+        cmd = kpipeliner_cmd + [sub, *flags]
+        threading.Thread(target=_run_pipeline, args=(cmd, _workdir, None, extra_env),
+                         daemon=True).start()
 
-    return JSONResponse({'ok': True})
+    # Echoed so the GUI can tell an outdated server (which drops the field) from one that applied it.
+    return JSONResponse({'ok': True, 'ignore_node_env': ignore_node_env})
 
 
 # ---------------------------------------------------------------------------
