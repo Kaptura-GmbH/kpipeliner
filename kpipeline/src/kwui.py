@@ -397,7 +397,7 @@ class UIProxy:
             return None
         return self._message
 
-    def end(self, msg=STATUS_OKAY, arg=None, *, target=None, detail=None):
+    def end(self, msg=STATUS_OKAY, arg=None, *, target=None, detail=None, keep_later=True):
         """Report this node's UI outcome and release a waiting `interact()`,
         which returns `msg` unchanged.
 
@@ -415,6 +415,9 @@ class UIProxy:
         target node (`target=` also works); for "ERROR" / "ERROR_SKIP" it is a short
         text shown under the step in the workflow's step list (`detail=` also works),
         e.g. `self.ui.end("ERROR_SKIP", "camera not found")`.
+
+        `keep_later` (JUMP back only): the steps after the target keep showing how they
+        ended until the workflow reaches them again (default); False shows them as not run.
         """
         status = _status_of(msg)
         payload = {'op': 'end', 'status': status}
@@ -423,6 +426,8 @@ class UIProxy:
             if goal:
                 status = STATUS_JUMP
                 payload = {'op': 'end', 'status': STATUS_JUMP, 'target': str(goal)}
+                if not keep_later:
+                    payload['keep_later'] = False
         elif status in (STATUS_ERROR, STATUS_ERROR_SKIP):
             text = detail if detail is not None else arg
             if text is not None and str(text).strip():
@@ -432,12 +437,13 @@ class UIProxy:
         self._done.set()
         return status
 
-    def jump_to(self, node_name):
+    def jump_to(self, node_name, *, keep_later=True):
         """Finish this node and continue the workflow at `node_name` — a node
         of the workflow's sequence, EARLIER (redo from there) or LATER (skip
         ahead). Same as `end("JUMP", node_name)`. A name that is not in the
-        sequence fails this node with a message listing the valid names."""
-        return self.end(STATUS_JUMP, node_name)
+        sequence fails this node with a message listing the valid names.
+        keep_later: see end()."""
+        return self.end(STATUS_JUMP, node_name, keep_later=keep_later)
 
     def load_layout(self, path=None, handlers=None):
         """Show a page designed visually with `kpl kwui design <node_type>` (kwebui edit
@@ -637,12 +643,12 @@ class NoopUI:
     def interact(self, timeout=None):
         return STATUS_OKAY
 
-    def end(self, msg=STATUS_OKAY, arg=None, *, target=None, detail=None):
+    def end(self, msg=STATUS_OKAY, arg=None, *, target=None, detail=None, keep_later=True):
         if str(msg).strip().upper() == STATUS_JUMP and (target or arg):
             return STATUS_JUMP
         return _status_of(msg)
 
-    def jump_to(self, node_name):
+    def jump_to(self, node_name, *, keep_later=True):
         return STATUS_JUMP
 
 
@@ -687,21 +693,30 @@ def get_active_bridge():
 # do nothing outside a live kwui run. (Reloading the browser page is client-side
 # and needs nothing from here — see the template's "Refresh page" button.)
 
-def reset_all(*_args):
-    """Start the whole workflow over from its first step."""
+def reset_all(*_args, keep_later=False):
+    """Start the whole workflow over from its first step: every step goes back to
+    'not run' and its page is dropped.
+
+    keep_later=True instead keeps the steps after the first one showing how they ended
+    (status + page, marked 'previous run', still clickable) until the workflow reaches
+    them again — they DO run again."""
     bridge = get_active_bridge()
     if bridge is not None:
-        bridge.reset_all()
+        bridge.reset_all(keep_later=keep_later)
 
 
-def restart_step(*_args):
+def restart_step(*_args, keep_later=True):
     """Run the current step again: stops it if it is running (everything it started),
     and rebuilds its page. After a failure it is the step that failed. If an earlier
     step was clicked in the tracker (to look at its output), THAT step is run again —
-    and the steps after it, as with any jump back."""
+    and the steps after it, as with any jump back.
+
+    keep_later: True (default) — the steps after it keep showing how they ended (status +
+    page, marked 'previous run', still clickable) until the workflow reaches them again;
+    they DO run again. False — they go back to 'not run' and their pages are dropped."""
     bridge = get_active_bridge()
     if bridge is not None:
-        bridge.restart_current()
+        bridge.restart_current(keep_later=keep_later)
 
 
 def continue_workflow(*_args):
@@ -732,11 +747,12 @@ def refresh_step(*_args):
           'use "Reset all" to start over.', flush=True)
 
 
-def jump_to_step(node_name):
-    """Continue the workflow at `node_name` (a button of your own can use this)."""
+def jump_to_step(node_name, *, keep_later=True):
+    """Continue the workflow at `node_name` (a button of your own can use this).
+    keep_later: see restart_step (default True)."""
     bridge = get_active_bridge()
     if bridge is not None:
-        bridge.request_jump(node_name, 'user')
+        bridge.request_jump(node_name, 'user', keep_later=keep_later)
 
 
 def set_active_bridge(bridge):
@@ -799,6 +815,17 @@ PROGRESS_FILE = 'kwui_progress.json'
 
 #: Step outcomes that count as done when a workflow is resumed.
 PROGRESS_DONE = ('completed', 'passed')
+#: Progress status of a step that ran in an EARLIER pass and was kept on view after a jump
+#: back (keep_later=True): its page/status stay visible, but it is NOT done — it runs again
+#: when the workflow gets there (and a resume starts before it). `was` = its old status.
+PROGRESS_PREVIOUS = 'previous'
+PREVIOUS_NOTE = 'previous run'
+
+
+def _previous_note(detail):
+    """Text under a step kept on view from an earlier pass."""
+    detail = str(detail or '').strip()
+    return f'{PREVIOUS_NOTE} · {detail}' if detail else PREVIOUS_NOTE
 
 
 def load_progress(path):
@@ -1077,6 +1104,8 @@ class KwuiBridge:
         # Control plane: pending jump = (target step, origin 'node' | 'user').
         self._cond = threading.Condition()
         self._pending = None
+        self._pending_keep = True     # keep_later of the pending jump (see request_jump)
+        self.jump_keep_later = True   # ... of the jump just taken (take_jump/wait_for_jump)
         self._proc = None
         self._proc_token = None
         self._proc_node = None
@@ -1281,6 +1310,32 @@ class KwuiBridge:
             except Exception:
                 self._pages.pop(name, None)
 
+    def restore_previous(self, records):
+        """Resume: steps after the resume point that had ended in an earlier pass
+        ({name: record}) are shown like mark_previous does — status + 'previous run' +
+        their kept page — and recorded as PROGRESS_PREVIOUS (not done: they run again)."""
+        with self._progress_lock:
+            for name, rec in records.items():
+                was = rec.get('was') if rec.get('status') == PROGRESS_PREVIOUS else rec.get('status')
+                self._progress[name] = {'status': PROGRESS_PREVIOUS, 'was': was,
+                                        'detail': rec.get('detail', ''), 'time': rec.get('time', '')}
+            self._write_progress()
+        for name, rec in records.items():
+            was = self._progress[name]['was']
+            self._set_step(name, 'completed' if was == 'completed' else 'error',
+                           _previous_note(rec.get('detail', '')))
+            if not (self._history and name in self._step_ids):
+                continue
+            try:
+                page = self._pages[name] = self.container.container(border=False)
+                when = f" ({rec['time']})" if rec.get('time') else ''
+                if not self._restore_page(name, page, f'ran in an earlier pass{when}'):
+                    page.text(f"Step '{name}' ran in an earlier pass{when}. What it showed "
+                              f"was not kept; it runs again when the workflow gets here.")
+                page.hide()
+            except Exception:
+                self._pages.pop(name, None)
+
     def _restore_page(self, name, page, what):
         """Build the kept page of step `name` into `page` under a one-line note.
         False when there is none (or it can't be shown) — `page` is then left empty."""
@@ -1355,17 +1410,17 @@ class KwuiBridge:
         self._error_skipped.add(node_name)
         self._details.setdefault(node_name, why)
 
-    def restart_current(self):
+    def restart_current(self, keep_later=True):
         """Run the current step again (stopping it first if it is running) — or the
         earlier step the user clicked in the tracker to look at, and from there on."""
         selected, self._selected = self._selected, None
         if selected in self.sequence and selected != self.current_step:
             print(f"[kwui] Restarting at the selected step '{selected}'.", flush=True)
-            self.request_jump(selected, 'user')
+            self.request_jump(selected, 'user', keep_later=keep_later)
             return
         step = self.current_step or (self.sequence[0] if self.sequence else None)
         if step:
-            self.request_jump(step, 'user')
+            self.request_jump(step, 'user', keep_later=keep_later)
 
     def skip_current(self):
         """Stop the running step and go on with the next one. After an error the
@@ -1435,16 +1490,19 @@ class KwuiBridge:
         with self._cond:
             self._in_step = False
 
-    def request_jump(self, target, origin):
+    def request_jump(self, target, origin, keep_later=True):
         """Ask the run loop to continue at `target` (a node of the sequence).
         origin 'node': the node asked via end('JUMP', ...) and ends by itself.
-        origin 'user': Reset — the running node is stopped (everything it started). Returns False, with a message, for an unknown target."""
+        origin 'user': Reset — the running node is stopped (everything it started).
+        keep_later: the steps after `target` keep their last state on view (mark_previous)
+        instead of going back to 'not run'. Returns False, with a message, for an unknown target."""
         if target not in self.sequence:
             print(f"[kwui] cannot jump to {target!r}: not in the workflow sequence "
                   f"({', '.join(self.sequence) or 'empty'}).", flush=True)
             return False
         with self._cond:
             self._pending = (target, origin, False)   # (target, origin, forced stop)
+            self._pending_keep = bool(keep_later)
             proc, token, node = self._proc, self._proc_token, self._proc_node
             self._cond.notify_all()
         if proc is not None:
@@ -1476,10 +1534,10 @@ class KwuiBridge:
                   f"for {JUMP_STOP_GRACE:g}s - stopping it.", flush=True)
             self.stop_run(proc, token)
 
-    def reset_all(self):
+    def reset_all(self, keep_later=False):
         """Start over from the first step."""
         if self.sequence:
-            self.request_jump(self.sequence[0], 'user')
+            self.request_jump(self.sequence[0], 'user', keep_later=keep_later)
 
     def _user_abort_pending(self):
         """A stop is under way on purpose (the user's Reset, or a jump's grace period
@@ -1493,6 +1551,7 @@ class KwuiBridge:
         always counts — the node was stopped on purpose."""
         with self._cond:
             pending, self._pending = self._pending, None
+            self.jump_keep_later, self._pending_keep = self._pending_keep, True
         if pending is None:
             return None
         target, origin, forced = pending
@@ -1505,6 +1564,7 @@ class KwuiBridge:
             while self._pending is None:
                 self._cond.wait()
             pending, self._pending = self._pending, None
+            self.jump_keep_later, self._pending_keep = self._pending_keep, True
         return pending[0]
 
     def reset_steps(self, names):
@@ -1533,6 +1593,31 @@ class KwuiBridge:
                     page.remove()
                 except Exception:
                     pass
+
+    def mark_previous(self, names):
+        """A jump back with keep_later: steps `names` (after the jump target) will run
+        again, but until the workflow gets there they keep showing how they ended — same
+        status colour, 'previous run' under it, their page still opens on a click. Their
+        progress record becomes PROGRESS_PREVIOUS, so a resume does not count them as
+        done. Steps with nothing finished to show (not run, or stopped mid-run by this
+        very jump) go back to 'not run' as before."""
+        reset = []
+        with self._progress_lock:
+            for name in names:
+                rec = self._progress.get(name) or {}
+                was = rec.get('was') if rec.get('status') == PROGRESS_PREVIOUS else rec.get('status')
+                status = self._status.get(name)
+                if status not in ('completed', 'error') or was not in PROGRESS_DONE + ('error',):
+                    reset.append(name)
+                    continue
+                self._progress[name] = {'status': PROGRESS_PREVIOUS, 'was': was,
+                                        'detail': rec.get('detail', ''), 'time': rec.get('time', '')}
+                self._set_step(name, status, _previous_note(rec.get('detail', '')))
+                if name in self._skipped_log:
+                    self._skipped_log.remove(name)
+            self._write_progress()
+        if reset:
+            self.reset_steps(reset)
 
     @staticmethod
     def _run_processes(process, token):
@@ -1637,7 +1722,8 @@ class KwuiBridge:
             self._clear()
         elif op == 'end':
             status = message.get('status')
-            if status == STATUS_JUMP and not self.request_jump(message.get('target'), 'node'):
+            if status == STATUS_JUMP and not self.request_jump(
+                    message.get('target'), 'node', keep_later=message.get('keep_later', True) is not False):
                 status = STATUS_ERROR  # unknown target: fail the node, loudly (message printed above)
             if status == STATUS_ERROR_SKIP:
                 self._error_skipped.add(node_name)
@@ -2019,11 +2105,17 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
         index = sequence.index(target)
         names = sequence[index:]
         print(f"\n[kwui] Continuing at step '{target}' ...", flush=True)
-        stale = invalidate(names) if invalidate is not None else None
+        stale = invalidate(names) if invalidate is not None else None   # ALL of them run again
         bridge.stop_leftovers(set(names) | set(stale or ()))
         if index > current + 1 and skip is not None:
             skip(sequence[current + 1:index])
-        bridge.reset_steps(names)
+        if bridge.jump_keep_later:
+            # keep_later (restart_step / jump_to default): the later steps stay on view
+            # with their last state until the workflow reaches them again.
+            bridge.reset_steps(names[:1])
+            bridge.mark_previous(names[1:])
+        else:
+            bridge.reset_steps(names)
         return index
 
     def resume_index():
@@ -2038,6 +2130,16 @@ def run_with_ui(run_one, sequence, *, path=None, host=DEFAULT_HOST,
         for name in done:
             if accept is not None:
                 accept(name)   # counts as run: not started again as a dependency
+        # Steps AFTER the resume point that ended in an earlier pass (kept on view by a
+        # jump back, or finished before it): shown as 'previous run', run again later.
+        later = {}
+        for name in sequence[len(done) + 1:]:
+            rec = (restore or {}).get(name)
+            was = rec and (rec.get('was') if rec.get('status') == PROGRESS_PREVIOUS else rec.get('status'))
+            if was in PROGRESS_DONE + ('error',):
+                later[name] = rec
+        if later:
+            bridge.restore_previous(later)
         if done:
             hint = ('Click a step and press "Restart step" to run it again; '
                     '"Reset all" starts over.')

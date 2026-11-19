@@ -1190,6 +1190,17 @@ failed, or was cut off by CTRL+C. Earlier steps are not run again. Click one of 
 first step. To start from the first step right away, run with `--no-use-cache`
 (`kpl run --kwui --no-use-cache`), which also recomputes everything.
 
+**Later steps stay visible when you go back.** When you press **Restart step** on an earlier
+step (or the workflow jumps back), the steps after it that already ran keep their status colour,
+get a small *previous run* note under them, and still show their last screen when clicked. They
+are not finished for this pass: each runs again when the workflow reaches it (the note then
+disappears), and if the run is stopped before that, they still show as *previous run* when you
+start it again. **Reset all** works as before: every step after the first goes back to *not run*.
+In your own code you choose per call — `restart_step(keep_later=False)`,
+`jump_to_step("node", keep_later=False)`, or in a node `self.ui.jump_to("node", keep_later=False)` /
+`self.ui.end("JUMP", "node", keep_later=False)` — to show the later steps as not run instead;
+`reset_all(keep_later=True)` keeps them.
+
 **Earlier steps keep their last screen.** When a step ends (finished, error, or skipped), its page is
 saved next to the step's results (`cache/<uuid>/<step>/kwui_page.json`, pictures in
 `kwui_page_files/`). After a restart of the workflow, clicking a finished step shows that page again

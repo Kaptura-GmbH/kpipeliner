@@ -759,7 +759,7 @@ class KapNode(KNode):
 | `self.ui.load_layout(path=None, handlers=None)` | Show a page designed visually (`kpl kwui design <node_type>`, see 7.5) and return `{widget id: handle}`; handler names in the layout call methods of this node. |
 | `self.ui.interact(timeout=None)` | Block until `end()` is called; returns exactly the `msg` it was given, unchanged (`None` on timeout). |
 | `self.ui.end(msg)` | Releases `interact()`, which returns `msg`. `OKAY` (success) / `ERROR` (fail the node even on exit 0 — the step icon shows an error and the workflow STOPS and waits) / `ERROR_SKIP` (the step icon shows an error but the workflow CONTINUES with the next step; the node counts as done, so outputs it saved stay usable and it is not re-run) / `REPEAT` (re-execute the node) are matched case-insensitively; any other message (str, dict, number...) counts as success and is just data for `interact()`'s caller. |
-| `self.ui.end("JUMP", "node")` / `self.ui.jump_to("node")` | Finish this node and continue the workflow at `node` — earlier (redo from there) or later (skip ahead). See 7.3. `end("JUMP")` without a target is just a data message. |
+| `self.ui.end("JUMP", "node")` / `self.ui.jump_to("node")` | Finish this node and continue the workflow at `node` — earlier (redo from there) or later (skip ahead). See 7.3. `end("JUMP")` without a target is just a data message. `keep_later=False` (keyword): later steps show as not run instead of keeping their previous state. |
 | `self.ui.set_theme(name)` / `.on_shutdown(cb)` / `.exit()` | The kwebui app's own methods, not widgets. |
 
 ### 7.3 Moving around the workflow — history, JUMP, Refresh, Reset
@@ -805,8 +805,8 @@ file at all (older kpl) → cached steps count as completed. Restored steps are 
 show their LAST SCREEN: every step's page is saved when it ends (`cache/<uuid>/<step>/kwui_page.json`
 + `kwui_page_files/` for pictures; incl. values the user entered; popups/toasts dropped,
 imagestream → last frame; > 5 MB or nothing drawn → a short note) and rebuilt inert (inputs
-disabled) under a grey note → "Restart step" re-runs them live; Reset all / a restart removes the records of the
-re-run steps. `--no-use-cache` starts at the first step with a fresh record.
+disabled) under a grey note → "Restart step" re-runs them live; Reset all removes the records of the re-run steps,
+a restart (keep_later default) keeps the later ones as `previous` (see below). `--no-use-cache` starts at the first step with a fresh record.
 
 **The template's buttons:**
 
@@ -816,7 +816,14 @@ re-run steps. `--no-use-cache` starts at the first step with a fresh record.
 | **Restart step** | `restart_step`: stops the running node and runs the CURRENT step again with a freshly built page; earlier steps are untouched. After an error it is the step that failed; after the workflow ended, the last step. If an EARLIER step was clicked in the tracker (to view its output), that step is run again instead — and every step after it (a jump back). The selection lasts until the next step starts; a step that never ran (pending) cannot be selected; a skipped one can. |
 | **Skip step** | `skip_step`: goes on with the NEXT step. While a step runs it is stopped first (everything it started); it stays in the tracker as `error` with the text "skipped", its page stays viewable (click it; it can also be selected for Restart step). A step that still finishes by itself counts as done. After an error it is Continue (the failed step stays `error`). In both cases the step counts as done for the rest of the run (`Pipeliner.accept_failed`): a later step reading its outputs gets whatever it saved and does not start it again. With nothing running and no error it only prints a message. |
 | **Continue** | `continue_workflow`: NOT in the current template (Skip step covers it) but kept for `workflow.py` files from older templates — only when the workflow STOPPED because of an error: goes on with the next step; the failed step stays shown as an error and counts as done. Otherwise it does nothing and the terminal says so. |
-| **Reset all** | `reset_all`: stops the running node and starts the whole workflow over from its first step. |
+| **Reset all** | `reset_all`: stops the running node and starts the whole workflow over from its first step (every later step back to not run). |
+
+**Later steps on a jump back** (`keep_later`): Restart step / `jump_to_step` / a node's `jump_to` / `end("JUMP", ...)`
+default to `keep_later=True` — steps after the target that already ran KEEP their status colour + a "previous run"
+note + their clickable page until the workflow reaches them; they still run again (progress record `previous`, not
+done, so a resume starts before them and shows them as previous too). `keep_later=False` = old behaviour (not run,
+page dropped). `reset_all` defaults to `keep_later=False` (unchanged); `reset_all(keep_later=True)` keeps them.
+Custom button: `on_click=lambda: restart_step(keep_later=False)`.
 
 These functions (all from `kpipeline.src.kwui`) and `jump_to_step("node")` (continue at a
 given step) can also be wired to buttons of your own. Stopping covers **every** node of the run — a UI step, a non-UI

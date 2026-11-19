@@ -19,7 +19,9 @@ The buttons (at the top of the sidebar, above the step list):
                    current step again with a fresh page. After an error it retries
                    the step that failed. If you clicked an earlier step in the
                    tracker to look at its output, THAT step is run again (and the
-                   steps after it).
+                   steps after it — until they run again they keep showing their
+                   last state, marked "previous run"; for the old behaviour use
+                   on_click=lambda: restart_step(keep_later=False)).
   * Skip step    — goes on with the next step. If a step is running, it is stopped
                    first (with everything it started); it stays in the list, marked
                    "skipped", and you can still click it to see what it showed. After
@@ -27,7 +29,7 @@ The buttons (at the top of the sidebar, above the step list):
   * Refresh page — reloads the browser page, exactly like pressing F5. It does not
                    touch the running node; the page is simply drawn again.
   * Reset all    — stops the running node (and everything it started) and starts the
-                   whole workflow over from its first step.
+                   whole workflow over from its first step (all later steps: not run).
 
 A node can also send the workflow to another step itself:
 `self.ui.jump_to("node_name")` (same as `self.ui.end("JUMP", "node_name")`), and choose
