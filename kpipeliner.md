@@ -162,7 +162,8 @@ kpl run process_1 --params iterations 10   # override an input for this run
 kpl clean [node]            # clear cache (all non-frozen nodes, or one node)
 kpl run --clean [node]      # clear the node's cache (no node: every node of the run; frozen kept), then run; also run_debug. Flag goes BEFORE the node; not with --kwui
 kpl run --ignore-node-env [node]  # every node runs with the shell's active python3/python, not its node_config.yaml env; also run_debug and --kwui. Also --ignore_node_env; works before OR after the node
-                                  # GUI: checkbox "Ignore node env" above Run/Debug This Node (uses the python active where `kpl gui` was started)
+                                  # also: kpl group run --ignore-node-env <group>
+                                  # GUI: checkbox "Ignore node env" above Run/Debug This Node and Run This Group (uses the python active where `kpl gui` was started)
 kpl gui                     # web GUI for the current directory (port 8601+)
 kpl gui --port 8701         # ...on a given port (also --host H, --no-browser); CTRL+C frees the port
 ```

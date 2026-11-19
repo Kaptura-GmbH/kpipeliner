@@ -82,7 +82,7 @@ kpl run                  # run it (or: kpl gui to do all of this visually)
 | `kpl status` | Show cached/frozen state per node |
 | `kpl clean [node]` | Clear cache (all nodes, or one) |
 | `kpl run --clean [node]` | Clear the cache of the node (or of the run's nodes), then run; also `run_debug` |
-| `kpl run --ignore-node-env [node]` | Run every node with the Python active in your shell, ignoring the env in its `node_config.yaml`; also `run_debug`, `--kwui` |
+| `kpl run --ignore-node-env [node]` | Run every node with the Python active in your shell, ignoring the env in its `node_config.yaml`; also `run_debug`, `--kwui`, `kpl group run --ignore-node-env <group>` |
 | `kpl kwui init` | Create `workflow.py` for kwui mode in this pipeline |
 | `kpl base_node create` | Scaffold a new node type in the current directory |
 | `kpl base_node install [--node_name N]` | Install the current directory as a node type |

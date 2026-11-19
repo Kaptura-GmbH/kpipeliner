@@ -99,8 +99,9 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false)
   // Pending single-node run awaiting the clear-cache confirmation: { nodeId, debug, ignoreNodeEnv }
   const [confirmRun, setConfirmRun] = useState(null)
-  // "Ignore node env" checkbox above Run/Debug This Node: a GUI-session setting (not saved,
-  // so a reload always starts with the nodes' own envs) that survives switching nodes.
+  // "Ignore node env" checkbox above Run/Debug This Node and Run This Group: one GUI-session
+  // setting (not saved, so a reload always starts with the nodes' own envs) that survives
+  // switching between nodes and groups.
   const [ignoreNodeEnv, setIgnoreNodeEnv] = useState(false)
   // Graph held back because some nodes are missing from the base nodes:
   // { missing: [{name, type}], nodes, edges }
@@ -464,11 +465,18 @@ export default function App() {
   }
 
   // Run a group like self.groups['x'].run() in node code (`kpl group run`).
-  function executeGroupRun(groupId) {
+  function executeGroupRun(groupId, ignoreNodeEnv = false) {
     clearNodeColors()
     // Dedicated endpoint: an older server answers 404 instead of silently
     // starting a full pipeline run.
-    axios.post(`${API}/run-group`, { group_id: groupId }).catch(() => {
+    axios.post(`${API}/run-group`, { group_id: groupId, ignore_node_env: ignoreNodeEnv }).then(r => {
+      if (ignoreNodeEnv && r.data?.ignore_node_env !== true) {
+        setLogs(prev => [...prev, {
+          text: "'Ignore node env' was NOT applied — the GUI server is outdated; restart it (kpl gui).",
+          cls: 'log-error',
+        }])
+      }
+    }).catch(() => {
       setLogs(prev => [...prev, {
         text: 'Run Group failed — the GUI server is outdated; restart it (kpl gui).',
         cls: 'log-error',
@@ -1191,7 +1199,7 @@ export default function App() {
             onRunDebug={() => selectedNode && handleRun(true, ignoreNodeEnv)}
             ignoreNodeEnv={ignoreNodeEnv}
             onIgnoreNodeEnvChange={setIgnoreNodeEnv}
-            onRunGroup={() => selectedNode && executeGroupRun(selectedNode.id)}
+            onRunGroup={() => selectedNode && executeGroupRun(selectedNode.id, ignoreNodeEnv)}
             pipelineNodeIds={nodes.filter(n => n.type === 'ioNode').map(n => n.id)}
             frozenIds={nodes.filter(n => n.type === 'ioNode' && n.data?.frozen).map(n => n.id)}
             onSetFrozen={handleSetFrozen}

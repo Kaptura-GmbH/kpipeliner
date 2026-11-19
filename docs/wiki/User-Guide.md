@@ -206,7 +206,7 @@ kpl node_env install --node_type <type>   # for one specific type
 
 To skip those environments for a run — for example when the active environment already has
 everything the nodes need, or the node envs aren't installed on this machine — add
-`--ignore-node-env` (or `--ignore_node_env`) to `kpl run` or `kpl run_debug`, also with `--kwui`. Unlike the
+`--ignore-node-env` (or `--ignore_node_env`) to `kpl run`, `kpl run_debug` or `kpl group run`, also with `--kwui`. Unlike the
 other run options it also works after the node name:
 
 ```bash
@@ -215,6 +215,7 @@ kpl run --ignore-node-env               # every node runs with my_env's python
 kpl run_debug --ignore-node-env my_node
 kpl run_debug my_node --ignore_node_env   # same
 kpl run --kwui --ignore-node-env
+kpl group run --ignore-node-env my_group
 ```
 
 Every node then runs with the Python your shell would start (`python3`, or `python`, found first
@@ -223,8 +224,9 @@ use it too. The run prints which interpreter it uses, and warns up front if that
 import kpipeliner (it needs `pyyaml`). Nodes that start nested runs (`self.groups[...]`,
 `self.nodes[...]`) pass the choice on. Without the flag nothing changes.
 
-In the GUI, tick **Ignore node env** above *Run This Node* / *Debug This Node* (Properties panel)
-for the same effect. "Your shell" is then the one you started `kpl gui` from: start the GUI
+In the GUI, tick **Ignore node env** above *Run This Node* / *Debug This Node*, or above *Run This
+Group* (Properties panel), for the same effect. It is one setting: ticked at a node, it is ticked
+at a group too. "Your shell" is then the one you started `kpl gui` from: start the GUI
 with the environment you want activated.
 
 ---
@@ -488,7 +490,7 @@ group continues it to a specific child's own jump-in (symmetric for
 ports, this is resolved on save into a plain node-to-node `jump_links` entry
 — the executor never sees the group.
 
-**Running a group:** with the group selected, the Properties panel has a **▶ Run This Group** button. It does the same as `self.groups['x'].run()` in node code and `kpl group run <id>` on the CLI: it runs whatever feeds the group's declared outputs, reusing cached results for their upstream dependencies. Only that chain runs: nodes that merely come *after* the group's output nodes through a jump link are not triggered (unlike `kpl run <node>`, which follows jump links onward). A group without any wired-up output has nothing to run — the terminal says so.
+**Running a group:** with the group selected, the Properties panel has a **▶ Run This Group** button. It does the same as `self.groups['x'].run()` in node code and `kpl group run <id>` on the CLI: it runs whatever feeds the group's declared outputs, reusing cached results for their upstream dependencies. Only that chain runs: nodes that merely come *after* the group's output nodes through a jump link are not triggered (unlike `kpl run <node>`, which follows jump links onward). A group without any wired-up output has nothing to run — the terminal says so. **Ignore node env** above the button runs the group's nodes with the Python of the shell `kpl gui` was started from (Step 8).
 
 **Removing a group's caches:** with the group selected, the Properties panel has a **🗑 Remove Caches** button that deletes the cache of every node inside it (nested groups included). Frozen nodes keep their cache — same rule as `kpl group clean`.
 
@@ -807,7 +809,7 @@ kpl run my_node_1
 | `kpl status` | Show cached / frozen state per node |
 | `kpl clean [<node>]` | Clear cache (all non-frozen nodes, or one node) |
 | `kpl run --clean [<node>]` / `kpl run_debug --clean [<node>]` | Clear the cache of the node (or of every node the run executes; frozen kept), then run |
-| `kpl run --ignore-node-env [<node>]` / `kpl run_debug --ignore-node-env [<node>]` | Run every node with the Python active in the shell instead of the env its `node_config.yaml` declares (Step 8); also with `--kwui` |
+| `kpl run --ignore-node-env [<node>]` / `kpl run_debug --ignore-node-env [<node>]` / `kpl group run --ignore-node-env <group>` | Run every node with the Python active in the shell instead of the env its `node_config.yaml` declares (Step 8); also with `--kwui` |
 | `kpl node_env install [--node_type T]` | Install node Python environments |
 | `kpl base_node create` | Create a node template in the current directory |
 | `kpl base_node install [--node_name N]` | Install the current directory as a node type |

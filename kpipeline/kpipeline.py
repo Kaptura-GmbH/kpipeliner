@@ -1806,6 +1806,10 @@ def _main():
                                  '(repeatable) - resolved to whichever inner node/port it '
                                  'feeds, same as a one-off `kpl run <node> --key value` '
                                  'override; never written to graph_config.yaml.')
+    p_grp_run.add_argument('--ignore-node-env', '--ignore_node_env', dest='ignore_node_env',
+                            action='store_true',
+                            help="Run every node of the group with the active python3/python "
+                                 "instead of the env its node_config.yaml declares (like kpl run)")
 
     # base_node
     p_bn = sub.add_parser('base_node', help='Manage base node types')
@@ -1927,6 +1931,7 @@ def _main():
             # (knode.py) can tell whether it actually succeeded.
             sys.exit(0 if ok else 1)
         elif args.group_command == 'run':
+            _apply_ignore_node_env(args)
             use_cache = getattr(args, 'use_cache', True)
             overrides = dict(kv.split('=', 1) for kv in (args.set or []))
             ok = p.run_group(args.group_id, use_cache=use_cache, debug=False, overrides=overrides)

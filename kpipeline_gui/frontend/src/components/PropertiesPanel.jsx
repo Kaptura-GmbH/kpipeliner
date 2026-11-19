@@ -423,6 +423,21 @@ function formatOutputValue(val) {
   return String(val)
 }
 
+// "Ignore node env" above the Run buttons of a node AND of a group: one setting (App state),
+// so ticking it in either place applies to both. Adds --ignore-node-env to those runs.
+function IgnoreNodeEnvCheck({ checked, onChange }) {
+  return (
+    <div className="props-field" style={{ marginBottom: 0 }}>
+      <label className="pipeline-check"
+        title="--ignore-node-env: every node of this run uses the python that was active in the shell 'kpl gui' was started from, not the venv/conda/pixi/uv env in its node_config.yaml">
+        <input type="checkbox" checked={!!checked}
+          onChange={e => onChange && onChange(e.target.checked)} />
+        Ignore node env
+      </label>
+    </div>
+  )
+}
+
 export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges, isRunning, nodeState, onUpdate, onUpdateEdge, onUpdateEdgesBulk, onGroupPortsChange, onExportGroup, onRun, onRunDebug, ignoreNodeEnv, onIgnoreNodeEnvChange, onRunGroup, availableGroups, onBindUnderlyingGroup, availableNodes, onBindUnderlyingNode, groupMembers, pipelineNodeIds, frozenIds, onSetFrozen, onPaletteChange }) {
   const [inputValues, setInputValues] = useState({})
   const [titleVal, setTitleVal] = useState('')
@@ -830,6 +845,7 @@ export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges,
             onExportGroup={onExportGroup}
           />
           <div className="props-section">
+            <IgnoreNodeEnvCheck checked={ignoreNodeEnv} onChange={onIgnoreNodeEnvChange} />
             <button className="btn btn-primary props-run-btn" disabled={isRunning} onClick={onRunGroup}
               title="Runs whatever feeds this group's outputs (like self.groups['x'].run() in node code); cached upstream results are reused">
               ▶ Run This Group
@@ -849,14 +865,7 @@ export default function PropertiesPanel({ node, selectedEdges, nodeTypes, edges,
       {/* Run buttons */}
       {!isGroup && (
         <div className="props-section">
-          <div className="props-field" style={{ marginBottom: 0 }}>
-            <label className="pipeline-check"
-              title="kpl run --ignore-node-env: every node of this run uses the python that was active in the shell 'kpl gui' was started from, not the venv/conda/pixi/uv env in its node_config.yaml">
-              <input type="checkbox" checked={!!ignoreNodeEnv}
-                onChange={e => onIgnoreNodeEnvChange && onIgnoreNodeEnvChange(e.target.checked)} />
-              Ignore node env
-            </label>
-          </div>
+          <IgnoreNodeEnvCheck checked={ignoreNodeEnv} onChange={onIgnoreNodeEnvChange} />
           <button className="btn btn-primary props-run-btn" disabled={isRunning} onClick={onRun}>
             ▶ Run This Node
           </button>

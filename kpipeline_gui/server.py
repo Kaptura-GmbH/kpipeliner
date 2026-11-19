@@ -7,7 +7,7 @@ Serves the React frontend and provides:
   GET  /api/graph              – current graph_config.yaml as JSON
   POST /api/graph              – save graph from JSON
   POST /api/run                – start pipeline (or a specific node); ignore_node_env → --ignore-node-env
-  POST /api/run-group          – run one group (`kpl group run <id>`)
+  POST /api/run-group          – run one group (`kpl group run <id>`); ignore_node_env → --ignore-node-env
   POST /api/stop               – stop current run
   GET  /api/status             – node states + system stats
   WS   /ws                     – real-time log + progress stream
@@ -1425,6 +1425,19 @@ def _kpl_cmd() -> list[str]:
     return kpl_command()
 
 
+def _ignore_node_env_args(ignore_node_env: bool):
+    """("Ignore node env" checkbox) -> (kpl flags, extra env for the run). Every node then runs
+    with the python that was active in the shell `kpl gui` was started from — `kpl gui` hands it
+    over as KPL_GUI_ACTIVE_PYTHON because this server's PATH already has kpl's own bin dir first."""
+    if not ignore_node_env:
+        return [], {}
+    extra_env = {}
+    shell_python = os.environ.get(GUI_ACTIVE_PYTHON_VAR)
+    if shell_python and not os.environ.get(IGNORE_NODE_ENV_VAR):
+        extra_env[IGNORE_NODE_ENV_VAR] = shell_python
+    return ['--ignore-node-env'], extra_env
+
+
 @app.post('/api/run-group')
 async def run_group(request_data: dict):
     """Same as GroupRef.run() in node code: `kpl group run <id>` runs only what
@@ -1440,9 +1453,12 @@ async def run_group(request_data: dict):
     # but it goes into kpl's argv, so it must not look like an option.
     if str(group_id).startswith('-'):
         return JSONResponse({'ok': False, 'msg': f'Invalid group id {group_id!r}.'}, status_code=400)
-    cmd = _kpl_cmd() + ['group', 'run', str(group_id)]
-    threading.Thread(target=_run_pipeline, args=(cmd, _workdir), daemon=True).start()
-    return JSONResponse({'ok': True})
+    ignore_node_env = request_data.get('ignore_node_env') is True
+    flags, extra_env = _ignore_node_env_args(ignore_node_env)
+    cmd = _kpl_cmd() + ['group', 'run', *flags, str(group_id)]
+    threading.Thread(target=_run_pipeline, args=(cmd, _workdir, None, extra_env), daemon=True).start()
+    # Echoed so the GUI can tell an outdated server (which drops the field) from one that applied it.
+    return JSONResponse({'ok': True, 'ignore_node_env': ignore_node_env})
 
 
 @app.post('/api/run')
@@ -1460,15 +1476,9 @@ async def run_pipeline(request_data: dict):
     kpipeliner_cmd = kpl_command()
 
     sub = 'run_debug' if debug else 'run'
-    # "Ignore node env" checkbox: every node runs with the python that was active in the
-    # shell `kpl gui` was started from, not its own venv/conda/pixi env. The flag must come
-    # BEFORE the node id (everything after it goes to the node as --input value pairs).
-    flags, extra_env = [], {}
-    if ignore_node_env:
-        flags = ['--ignore-node-env']
-        shell_python = os.environ.get(GUI_ACTIVE_PYTHON_VAR)
-        if shell_python and not os.environ.get(IGNORE_NODE_ENV_VAR):
-            extra_env[IGNORE_NODE_ENV_VAR] = shell_python
+    # "Ignore node env" checkbox. The flag must come BEFORE the node id (everything after
+    # it goes to the node as --input value pairs).
+    flags, extra_env = _ignore_node_env_args(ignore_node_env)
 
     if node_id:
         # Drop the selected node's cache first only when the user confirmed it
