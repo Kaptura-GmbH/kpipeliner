@@ -4,6 +4,7 @@ import re
 
 from kpipeline.src.knode import KNode, NodeState
 from kpipeline.src.kparameter import KParameter
+from kpipeline.src import kyaml
 from kpipeline.src.kbase_nodes import (
     get_default_base_nodes_dir, resolve_base_nodes_dirs, scan_base_nodes,
 )
@@ -127,7 +128,7 @@ class KGraph:
     def load_from_yaml(self, yaml_path):
         assert os.path.exists(yaml_path), f"Graph config '{yaml_path}' not found."
         with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = kyaml.load(f)   # libyaml when available: ~5x faster on a big graph
         if not cfg:
             return
 
@@ -294,8 +295,9 @@ class KGraph:
                     for k, v in node_slots.items()
                 ]
             cfg['nodes'].append(node_cfg)
-        with open(yaml_path, 'w') as f:
-            yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
+        # Only top-level keys whose value changed are rewritten: comments and layout of the
+        # rest of an existing file stay (kpl add, MCP edits).
+        kyaml.save_preserving(yaml_path, cfg)
         if self._verbose:
             print(f"Graph saved to '{yaml_path}'.")
 
@@ -466,7 +468,7 @@ class KGraph:
                 continue
             cfg_path = os.path.join(info['dir'], 'node_config.yaml')
             try:
-                cfg = yaml.safe_load(open(cfg_path)) or {}
+                cfg = kyaml.load(open(cfg_path)) or {}
             except Exception:
                 continue
             result.append({

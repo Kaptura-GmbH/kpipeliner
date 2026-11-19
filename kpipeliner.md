@@ -45,7 +45,7 @@ kpl add <node_type>         # appends instance <node_type>_1 with default inputs
 kpl add <node_type> myname  # or with an explicit name
 ```
 
-Then edit `graph_config.yaml`. Full schema:
+Then edit `graph_config.yaml` (comments are fine: GUI/`kpl add`/MCP saves rewrite only the top-level keys whose value changed, so comments elsewhere stay — not inside a rewritten block such as `nodes:`). Full schema:
 
 ```yaml
 name: "my_pipeline"

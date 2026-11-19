@@ -291,8 +291,13 @@ message and the field goes back to the saved value — for example a cache or da
 `$`, quotes or `\`, or a base-nodes dir containing a space (node commands couldn't run from
 there). Changing the base-node dirs or the available types updates the Components panel right
 away; if the graph then uses a node type the dirs no longer provide, a warning names it. Changing
-the cache or data dir does not move existing files. Like every GUI save, this rewrites
-`graph_config.yaml` without its comments.
+the cache or data dir does not move existing files.
+
+Saving keeps your own edits to `graph_config.yaml`: the GUI (this panel and every change on the
+canvas), `kpl add` and agents rewrite only the top-level settings whose value changed — comments,
+blank lines and the order of everything else stay as you wrote them. A single-line setting keeps
+its trailing `# comment`. Lost are only comments *inside* a block that is rewritten, e.g. inside
+`nodes:` (the GUI manages that list) or below a list setting you just changed.
 
 Select a node to edit it:
 

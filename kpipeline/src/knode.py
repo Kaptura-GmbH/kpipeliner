@@ -15,6 +15,7 @@ import threading
 import time
 from datetime import datetime
 
+from kpipeline.src import kyaml
 from kpipeline.src.kparameter import KParameter
 
 # ---------------------------------------------------------------------------
@@ -622,7 +623,7 @@ class KNode:
 
     def _load_from_yaml(self, yaml_path):
         with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = kyaml.load(f)   # libyaml when available: read once per graph node
         if not cfg:
             return
 

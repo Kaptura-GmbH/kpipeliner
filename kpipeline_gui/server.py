@@ -16,6 +16,7 @@ Serves the React frontend and provides:
 
 import argparse
 import asyncio
+import copy
 import atexit
 import importlib.util
 import json
@@ -49,6 +50,7 @@ sys.path.insert(0, PIPELINER_DIR)
 
 from kpipeline import KGraph  # noqa: E402
 from kpipeline.src.kgraph import is_valid_name  # noqa: E402
+from kpipeline.src import kyaml  # noqa: E402
 from kpipeline.src.knode import (  # noqa: E402
     _LEVEL_NAME_TO_NUM, IGNORE_NODE_ENV_VAR, GUI_ACTIVE_PYTHON_VAR)
 from kpipeline.src.kbase_nodes import (  # noqa: E402
@@ -392,7 +394,7 @@ def _pipeline_groups_setting():
     """The pipeline's `groups_dir` value as written in graph_config.yaml (None if unset)."""
     try:
         with open(_graph_config_path()) as f:
-            return (yaml.safe_load(f) or {}).get('groups_dir') or None
+            return (kyaml.load(f) or {}).get('groups_dir') or None
     except Exception:
         return None
 
@@ -424,7 +426,7 @@ def _list_group_components() -> list[dict]:
         if (cat, name) in seen:      # an earlier dir (the pipeline's groups_dir) has it
             return
         try:
-            cfg = yaml.safe_load(open(path)) or {}
+            cfg = kyaml.load(open(path)) or {}
         except Exception:
             return
         seen.add((cat, name))
@@ -573,7 +575,7 @@ def get_pipeline_settings():
     if not os.path.exists(cfg_path):
         return JSONResponse({'ok': False, 'msg': 'No graph_config.yaml in this pipeline.'})
     with open(cfg_path) as f:
-        cfg = yaml.safe_load(f) or {}
+        cfg = kyaml.load(f) or {}
     return _pipeline_settings_response(cfg)
 
 
@@ -597,16 +599,17 @@ async def save_pipeline_settings(body: dict):
     if not os.path.exists(cfg_path):
         return JSONResponse({'ok': False, 'msg': 'No graph_config.yaml in this pipeline.'}, status_code=404)
     with open(cfg_path) as f:
-        cfg = yaml.safe_load(f) or {}
+        old_text = f.read()
+    old_cfg = kyaml.load(old_text) or {}
+    cfg = dict(old_cfg)   # top-level values are replaced, never changed in place
     for key, val in clean.items():
         if key == 'groups_dir' and not val:
             cfg.pop('groups_dir', None)   # no key = the installation-wide group dir
         else:
             cfg[key] = val
-    tmp = f'{cfg_path}.{os.getpid()}.tmp'
-    with open(tmp, 'w') as f:
-        yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
-    os.replace(tmp, cfg_path)   # never a half-written graph_config.yaml
+    # Only the changed keys' lines are rewritten: the user's comments, blank lines and
+    # key order stay (atomic write — never a half-written graph_config.yaml).
+    kyaml.save_preserving(cfg_path, cfg, old_text=old_text, old_cfg=old_cfg)
     return _pipeline_settings_response(cfg)
 
 
@@ -629,7 +632,7 @@ def get_graph():
     if not os.path.exists(cfg_path):
         return JSONResponse({'nodes': [], 'edges': [], 'missing': []})
     with open(cfg_path) as f:
-        cfg = yaml.safe_load(f) or {}
+        cfg = kyaml.load(f) or {}
 
     # A file with a non-\w name is refused here (with the message the GUI shows)
     # rather than drawn: a later save would be rejected anyway, and running it
@@ -744,7 +747,7 @@ def get_graph():
         node_slots = []
         if os.path.exists(base_cfg_path):
             try:
-                bc = yaml.safe_load(open(base_cfg_path)) or {}
+                bc = kyaml.load(open(base_cfg_path)) or {}
                 inp_names = [i['name'] for i in bc.get('inputs', []) or []]
                 out_names = [o['name'] for o in bc.get('outputs', []) or []]
                 is_kwui = bool(bc.get('kwui', False))
@@ -1125,9 +1128,14 @@ async def save_graph(request_data: dict):
         edge_map[(e['target'], e['targetHandle'])] = _resolve(e['source'], e.get('sourceHandle'))
 
     cfg_path = _graph_config_path()
+    old_text, old_cfg = '', None
     if os.path.exists(cfg_path):
         with open(cfg_path) as f:
-            cfg = yaml.safe_load(f) or {}
+            old_text = f.read()
+        cfg = kyaml.load(old_text) or {}
+        # untouched copy: save_preserving compares against it (~10 ms on a 200-node graph,
+        # far less than parsing the file a second time)
+        old_cfg = copy.deepcopy(cfg)
     else:
         cfg = {'name': 'graph', 'description': '', 'author': '', 'date': '', 'version': '1.0'}
 
@@ -1262,8 +1270,9 @@ async def save_graph(request_data: dict):
     elif 'edge_meta' in cfg:
         del cfg['edge_meta']
 
-    with open(cfg_path, 'w') as f:
-        yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
+    # Only top-level keys whose value changed are rewritten (normally `nodes` & co.):
+    # comments and layout of everything else in the file stay.
+    kyaml.save_preserving(cfg_path, cfg, old_text=old_text, old_cfg=old_cfg)
 
     return JSONResponse({'ok': True})
 
@@ -1471,7 +1480,7 @@ async def run_pipeline(request_data: dict):
             frozen = set()
             try:
                 with open(_graph_config_path()) as f:
-                    frozen = set((yaml.safe_load(f) or {}).get('frozen_nodes') or [])
+                    frozen = set((kyaml.load(f) or {}).get('frozen_nodes') or [])
             except Exception:
                 pass
             if node_id in frozen:
@@ -1794,7 +1803,7 @@ def clear_cache():
         return JSONResponse({'ok': False, 'msg': 'No graph config found.'})
 
     with open(cfg_path) as f:
-        cfg = yaml.safe_load(f) or {}
+        cfg = kyaml.load(f) or {}
 
     graph = KGraph(verbose=False)
     os.chdir(_workdir)
